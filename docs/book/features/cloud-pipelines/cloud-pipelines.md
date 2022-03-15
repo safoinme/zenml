@@ -69,7 +69,7 @@ zenml metadata-store register METADATA_STORE_NAME --type=mysql \
     --host=127.0.0.1 \ 
     --port=3306 \
     --username=USER \
-    --passwd=PASSWD \
+    --password=PASSWD \
     --database=DATABASE
 ```
 
@@ -107,6 +107,22 @@ Configuring a remote Artifact Store for ZenML is a one-liner using the CLI:
 ```
 zenml artifact-store register ARTIFACT_STORE_NAME --type=gcp --path=gs://your-bucket/sub/dir
 ```
+
+## Step Operators
+
+Sometimes, you need to specify specialized cloud backends ✨ for different steps. One example could be using powerful GPU instances for training jobs or distributed compute for ingestion streams. A `StepOperator` is what allows you to define this custom logic for ZenML to use for each step. 
+
+{% hint style="info" %}
+There are two step operators (for **AzureML** and **AWS Sagemaker**) that are implemented by the ZenML core team and it is very simple to write your own (more on that later).
+{% endhint %}
+
+### I’m confused 🤔. How is it different from an orchestrator?
+
+An orchestrator is a higher level entity than a step operator. It is what executes the 
+entire ZenML pipeline code and decides what specifications and backends to use for each step. 
+
+The orchestrator runs the code which launches your step in a backend of your choice. If you don’t specify a step operator, then the step code runs on the same compute instance as your orchestrator.
+
 
 ## Orchestrator
 
