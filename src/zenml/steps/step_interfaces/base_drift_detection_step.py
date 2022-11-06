@@ -11,28 +11,38 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Base drift detection step."""
 
 from abc import abstractmethod
 from typing import Any
 
 from zenml.artifacts import DataArtifact
-from zenml.steps import BaseStep, BaseStepConfig, StepContext
+from zenml.steps import BaseParameters, BaseStep, StepContext
 
 
-class BaseDriftDetectionConfig(BaseStepConfig):
-    """Base class for drift detection step configurations"""
+class BaseDriftDetectionParameters(BaseParameters):
+    """Base class for drift detection step parameters."""
 
 
 class BaseDriftDetectionStep(BaseStep):
-    """Base step implementation for any drift detection step implementation
-    on ZenML"""
+    """Base step implementation for any drift detection step implementation."""
 
     @abstractmethod
     def entrypoint(  # type: ignore[override]
         self,
         reference_dataset: DataArtifact,
         comparison_dataset: DataArtifact,
-        config: BaseDriftDetectionConfig,
+        params: BaseDriftDetectionParameters,
         context: StepContext,
     ) -> Any:
-        """Base entrypoint for any drift detection implementation"""
+        """Base entrypoint for any drift detection implementation.
+
+        Args:
+            reference_dataset: The reference dataset.
+            comparison_dataset: The comparison dataset.
+            params: The parameters for the step.
+            context: The context for the step.
+
+        Returns:
+            The result of the drift detection.
+        """

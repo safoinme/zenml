@@ -11,37 +11,56 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""
+"""Initialization of the ZenML Azure integration.
+
 The Azure integration submodule provides a way to run ZenML pipelines in a cloud
 environment. Specifically, it allows the use of cloud artifact stores,
 and an `io` module to handle file operations on Azure Blob Storage.
+The Azure Step Operator integration submodule provides a way to run ZenML steps
+in AzureML.
 """
-from typing import List
+from typing import List, Type
 
 from zenml.enums import StackComponentType
 from zenml.integrations.constants import AZURE
 from zenml.integrations.integration import Integration
-from zenml.zen_stores.models import FlavorWrapper
+from zenml.models import FlavorModel
+from zenml.stack import Flavor
 
 AZURE_ARTIFACT_STORE_FLAVOR = "azure"
+AZURE_SECRETS_MANAGER_FLAVOR = "azure"
+AZUREML_STEP_OPERATOR_FLAVOR = "azureml"
 
 
 class AzureIntegration(Integration):
     """Definition of Azure integration for ZenML."""
 
     NAME = AZURE
-    REQUIREMENTS = ["adlfs==2021.10.0"]
+    REQUIREMENTS = [
+        "adlfs==2021.10.0",
+        "azure-keyvault-keys",
+        "azure-keyvault-secrets",
+        "azure-identity==1.10.0",
+        "azureml-core==1.42.0.post1",
+    ]
 
     @classmethod
-    def flavors(cls) -> List[FlavorWrapper]:
-        """Declares the flavors for the integration."""
+    def flavors(cls) -> List[Type[Flavor]]:
+        """Declares the flavors for the integration.
+
+        Returns:
+            List of stack component flavors for this integration.
+        """
+        from zenml.integrations.azure.flavors import (
+            AzureArtifactStoreFlavor,
+            AzureMLStepOperatorFlavor,
+            AzureSecretsManagerFlavor,
+        )
+
         return [
-            FlavorWrapper(
-                name=AZURE_ARTIFACT_STORE_FLAVOR,
-                source="zenml.integrations.azure.artifact_stores.AzureArtifactStore",
-                type=StackComponentType.ARTIFACT_STORE,
-                integration=cls.NAME,
-            )
+            AzureArtifactStoreFlavor,
+            AzureSecretsManagerFlavor,
+            AzureMLStepOperatorFlavor,
         ]
 
 

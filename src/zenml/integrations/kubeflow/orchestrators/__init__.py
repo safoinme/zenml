@@ -11,7 +11,10 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Initialization of the Kubeflow ZenML orchestrator."""
 
 from zenml.integrations.kubeflow.orchestrators.kubeflow_orchestrator import (  # noqa
     KubeflowOrchestrator,
 )
+
+__all__ = ["KubeflowOrchestrator"]

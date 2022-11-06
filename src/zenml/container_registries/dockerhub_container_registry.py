@@ -11,16 +11,23 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-from typing import ClassVar
+"""Implementation of a DockerHub Container Registry class."""
+
 
 from zenml.container_registries.base_container_registry import (
-    BaseContainerRegistry,
+    BaseContainerRegistryFlavor,
 )
 from zenml.enums import ContainerRegistryFlavor
 
 
-class DockerHubContainerRegistry(BaseContainerRegistry):
+class DockerHubContainerRegistryFlavor(BaseContainerRegistryFlavor):
     """Class for DockerHub Container Registry."""
 
-    # Class Configuration
-    FLAVOR: ClassVar[str] = ContainerRegistryFlavor.DOCKERHUB.value
+    @property
+    def name(self) -> str:
+        """Name of the flavor.
+
+        Returns:
+            The name of the flavor.
+        """
+        return ContainerRegistryFlavor.DOCKERHUB.value

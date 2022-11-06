@@ -11,5 +11,6 @@ flake8 $SRC
 autoflake --remove-all-unused-imports --recursive --remove-unused-variables --in-place $SRC --exclude=__init__.py --check
 isort $SRC scripts --check-only
 black $SRC  --check
-interrogate $SRC_NO_TESTS -c pyproject.toml
+
+# check type annotations
 mypy $SRC_NO_TESTS

@@ -67,7 +67,6 @@ def daemonize(
     ```
 
     Args:
-        _func: decorated function
         pid_file: an optional file where the PID of the daemon process will
             be stored.
         log_file: file where stdout and stderr are redirected for the daemon
@@ -75,6 +74,7 @@ def daemonize(
             its stdout/stderr redirected to /dev/null).
         working_directory: working directory for the daemon process,
             defaults to the root directory.
+
     Returns:
         Decorated function that, when called, will detach from the current
         process and continue executing in the background, as a daemon
@@ -83,7 +83,13 @@ def daemonize(
 
     def inner_decorator(_func: F) -> F:
         def daemon(*args: Any, **kwargs: Any) -> None:
-            """Standard daemonization of a process."""
+            """Standard daemonization of a process.
+
+            Args:
+                *args: Arguments to be passed to the decorated function.
+                **kwargs: Keyword arguments to be passed to the decorated
+                    function.
+            """
             # flake8: noqa: C901
             if sys.platform == "win32":
                 logger.error(
@@ -114,9 +120,7 @@ else:
     CHILD_PROCESS_WAIT_TIMEOUT = 5
 
     def terminate_children() -> None:
-        """Terminate all processes that are children of the currently running
-        process.
-        """
+        """Terminate all processes that are children of the currently running process."""
         pid = os.getpid()
         try:
             parent = psutil.Process(pid)
@@ -126,11 +130,13 @@ else:
         children = parent.children(recursive=False)
 
         for p in children:
+            sys.stderr.write(f"Terminating child process with PID {p.pid}...\n")
             p.terminate()
         _, alive = psutil.wait_procs(
             children, timeout=CHILD_PROCESS_WAIT_TIMEOUT
         )
         for p in alive:
+            sys.stderr.write(f"Killing child process with PID {p.pid}...\n")
             p.kill()
         _, alive = psutil.wait_procs(
             children, timeout=CHILD_PROCESS_WAIT_TIMEOUT
@@ -156,6 +162,7 @@ else:
                 defaults to the root directory.
             args: Positional arguments to pass to the daemon function.
             kwargs: Keyword arguments to pass to the daemon function.
+
         Raises:
             FileExistsError: If the PID file already exists.
         """
@@ -164,6 +171,11 @@ else:
             pid_file = os.path.abspath(pid_file)
         if log_file:
             log_file = os.path.abspath(log_file)
+
+        # create parent directory if necessary
+        dir_name = os.path.dirname(pid_file)
+        if not os.path.exists(dir_name):
+            os.makedirs(dir_name)
 
         # check if PID file exists
         if pid_file and os.path.exists(pid_file):
@@ -233,12 +245,21 @@ else:
         # register actions in case this process exits/gets killed
         def cleanup() -> None:
             """Daemon cleanup."""
+            sys.stderr.write("Cleanup: terminating children processes...\n")
             terminate_children()
             if pid_file and os.path.exists(pid_file):
+                sys.stderr.write(f"Cleanup: removing PID file {pid_file}...\n")
                 os.remove(pid_file)
+            sys.stderr.flush()
 
         def sighndl(signum: int, frame: Optional[types.FrameType]) -> None:
-            """Daemon signal handler."""
+            """Daemon signal handler.
+
+            Args:
+                signum: Signal number.
+                frame: Frame object.
+            """
+            sys.stderr.write(f"Handling signal {signum}...\n")
             cleanup()
 
         signal.signal(signal.SIGTERM, sighndl)
@@ -270,12 +291,14 @@ else:
             logger.warning("PID from '%s' does not exist.", pid_file)
 
     def get_daemon_pid_if_running(pid_file: str) -> Optional[int]:
-        """Read and return the PID value from a PID file if the daemon process
-        tracked by the PID file is running.
+        """Read and return the PID value from a PID file.
+
+        It does this if the daemon process tracked by the PID file is running.
 
         Args:
             pid_file: Path to file containing the PID of the daemon
                 process to check.
+
         Returns:
             The PID of the daemon process if it is running, otherwise None.
         """
@@ -283,11 +306,16 @@ else:
             with open(pid_file, "r") as f:
                 pid = int(f.read().strip())
         except (IOError, FileNotFoundError):
+            logger.debug(
+                f"Daemon PID file '{pid_file}' does not exist or cannot be read."
+            )
             return None
 
         if not pid or not psutil.pid_exists(pid):
+            logger.debug(f"Daemon with PID '{pid}' is no longer running.")
             return None
 
+        logger.debug(f"Daemon with PID '{pid}' is running.")
         return pid
 
     def check_if_daemon_is_running(pid_file: str) -> bool:
@@ -296,5 +324,8 @@ else:
         Args:
             pid_file: Path to file containing the PID of the daemon
                 process to check.
+
+        Returns:
+            True if the daemon process is running, otherwise False.
         """
         return get_daemon_pid_if_running(pid_file) is not None

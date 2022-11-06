@@ -11,11 +11,25 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""ZenML enums."""
 
 import logging
 from enum import Enum
+from typing import List
 
 from zenml.utils.enum_utils import StrEnum
+
+
+class ArtifactType(StrEnum):
+    """All possible types an artifact can have."""
+
+    DATAANALYSIS = "DataAnalysisArtifact"
+    DATA = "DataArtifact"
+    MODEL = "ModelArtifact"
+    SCHEMA = "SchemaArtifact"
+    SERVICE = "ServiceArtifact"
+    STATISTICS = "StatisticsArtifact"
+    BASE = "BaseArtifact"
 
 
 class ExecutionStatus(StrEnum):
@@ -25,6 +39,28 @@ class ExecutionStatus(StrEnum):
     COMPLETED = "completed"
     RUNNING = "running"
     CACHED = "cached"
+
+    @staticmethod
+    def run_status(
+        step_statuses: List["ExecutionStatus"], num_steps: int
+    ) -> "ExecutionStatus":
+        """Returns the overall run status based on the list of step statuses.
+
+        Args:
+            step_statuses: A list of step statuses.
+            num_steps: The number of steps in the pipeline.
+
+        Returns:
+            The overall run status.
+        """
+        if ExecutionStatus.FAILED in step_statuses:
+            return ExecutionStatus.FAILED
+        if (
+            len(step_statuses) < num_steps
+            or ExecutionStatus.RUNNING in step_statuses
+        ):
+            return ExecutionStatus.RUNNING
+        return ExecutionStatus.COMPLETED
 
 
 class LoggingLevels(Enum):
@@ -41,36 +77,34 @@ class LoggingLevels(Enum):
 class StackComponentType(StrEnum):
     """All possible types a `StackComponent` can have."""
 
-    ORCHESTRATOR = "orchestrator"
-    METADATA_STORE = "metadata_store"
+    ALERTER = "alerter"
+    ANNOTATOR = "annotator"
     ARTIFACT_STORE = "artifact_store"
     CONTAINER_REGISTRY = "container_registry"
-    STEP_OPERATOR = "step_operator"
-    FEATURE_STORE = "feature_store"
-    SECRETS_MANAGER = "secrets_manager"
-    MODEL_DEPLOYER = "model_deployer"
+    DATA_VALIDATOR = "data_validator"
     EXPERIMENT_TRACKER = "experiment_tracker"
+    FEATURE_STORE = "feature_store"
+    MODEL_DEPLOYER = "model_deployer"
+    ORCHESTRATOR = "orchestrator"
+    SECRETS_MANAGER = "secrets_manager"
+    STEP_OPERATOR = "step_operator"
 
     @property
     def plural(self) -> str:
-        """Returns the plural of the enum value."""
+        """Returns the plural of the enum value.
+
+        Returns:
+            The plural of the enum value.
+        """
         if self == StackComponentType.CONTAINER_REGISTRY:
             return "container_registries"
 
         return f"{self.value}s"
 
 
-class MetadataContextTypes(Enum):
-    """All possible types that contexts can have within pipeline nodes"""
-
-    STACK = "stack"
-    PIPELINE_REQUIREMENTS = "pipeline_requirements"
-
-
 class StoreType(StrEnum):
-    """Repository Store Backend Types"""
+    """Repository Store Backend Types."""
 
-    LOCAL = "local"
     SQL = "sql"
     REST = "rest"
 
@@ -83,11 +117,11 @@ class ContainerRegistryFlavor(StrEnum):
     DOCKERHUB = "dockerhub"
     GCP = "gcp"
     AZURE = "azure"
-    GITLAB = "gitlab"
 
 
 class CliCategories(StrEnum):
     """All possible categories for CLI commands.
+
     Note: The order of the categories is important. The same
     order is used to sort the commands in the CLI help output.
     """
@@ -98,3 +132,35 @@ class CliCategories(StrEnum):
     MANAGEMENT_TOOLS = "Management Tools"
     IDENTITY_AND_SECURITY = "Identity and Security"
     OTHER_COMMANDS = "Other Commands"
+
+
+class AnnotationTasks(StrEnum):
+    """Supported annotation tasks."""
+
+    IMAGE_CLASSIFICATION = "image_classification"
+    OBJECT_DETECTION_BOUNDING_BOXES = "object_detection_bounding_boxes"
+
+
+class SecretValidationLevel(StrEnum):
+    """Secret validation levels."""
+
+    SECRET_AND_KEY_EXISTS = "SECRET_AND_KEY_EXISTS"
+    SECRET_EXISTS = "SECRET_EXISTS"
+    NONE = "NONE"
+
+
+class ServerProviderType(StrEnum):
+    """ZenML server providers."""
+
+    LOCAL = "local"
+    DOCKER = "docker"
+    AWS = "aws"
+    GCP = "gcp"
+    AZURE = "azure"
+
+
+class AnalyticsEventSource(StrEnum):
+    """Enum to identify analytics events source."""
+
+    ZENML_GO = "zenml go"
+    ZENML_SERVER = "zenml server"

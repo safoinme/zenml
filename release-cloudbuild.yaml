@@ -1,0 +1,132 @@
+steps:
+  # build base image - python 3.7
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - '-c'
+      - |
+        docker build \
+          --build-arg ZENML_VERSION=$TAG_NAME \
+          --build-arg PYTHON_VERSION=3.7 \
+          --target base \
+          -f docker/base.Dockerfile . \
+          -t $$USERNAME/zenml:$TAG_NAME-py3.7
+
+        # use latest tags only for official releases
+        if [[ $TAG_NAME =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          docker tag $$USERNAME/zenml:$TAG_NAME-py3.7 $$USERNAME/zenml:py3.7
+        fi
+    id: build-base-3.7
+    waitFor: ['-']
+    entrypoint: bash
+    secretEnv:
+      - USERNAME
+  
+  # build base image - python 3.8
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - '-c'
+      - |
+        docker build \
+          --build-arg ZENML_VERSION=$TAG_NAME \
+          --build-arg PYTHON_VERSION=3.8 \
+          --target base \
+          -f docker/base.Dockerfile . \
+          -t $$USERNAME/zenml:$TAG_NAME-py3.8 \
+          -t $$USERNAME/zenml:$TAG_NAME
+
+        # use latest tags only for official releases
+        if [[ $TAG_NAME =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          docker tag $$USERNAME/zenml:$TAG_NAME-py3.8 $$USERNAME/zenml:py3.8
+          docker tag $$USERNAME/zenml:$TAG_NAME-py3.8 $$USERNAME/zenml:latest
+        fi
+    id: build-base-3.8
+    waitFor: ['-']
+    entrypoint: bash
+    secretEnv:
+      - USERNAME
+
+  # build base image - python 3.9
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - '-c'
+      - |
+        docker build \
+          --build-arg ZENML_VERSION=$TAG_NAME \
+          --build-arg PYTHON_VERSION=3.9 \
+          --target base \
+          -f docker/base.Dockerfile . \
+          -t $$USERNAME/zenml:$TAG_NAME-py3.9
+
+        # use latest tags only for official releases
+        if [[ $TAG_NAME =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          docker tag $$USERNAME/zenml:$TAG_NAME-py3.9 $$USERNAME/zenml:py3.9
+        fi
+    id: build-base-3.9
+    waitFor: ['-']
+    entrypoint: bash
+    secretEnv:
+      - USERNAME
+
+  # build server image - python 3.8 only
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - '-c'
+      - |
+        docker build \
+        --build-arg ZENML_VERSION=$TAG_NAME \
+        --build-arg PYTHON_VERSION=3.8 \
+        -f docker/base.Dockerfile . \
+        -t $$USERNAME/zenml-server:$TAG_NAME
+        
+        # use latest tags only for official releases
+        if [[ $TAG_NAME =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          docker tag $$USERNAME/zenml-server:$TAG_NAME $$USERNAME/zenml-server:latest
+        fi         
+    id: build-server
+    waitFor: ['-']
+    entrypoint: bash
+    secretEnv:
+      - USERNAME
+
+  # login to Dockerhub
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - '-c'
+      - docker login --username=$$USERNAME --password=$$PASSWORD
+    id: docker-login
+    entrypoint: bash
+    secretEnv:
+      - USERNAME
+      - PASSWORD
+
+  # push base images
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - '-c'
+      - docker push --all-tags $$USERNAME/zenml
+    id: push-base
+    waitFor:
+      - docker-login
+    entrypoint: bash
+    secretEnv:
+      - USERNAME
+
+  # push server images
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - '-c'
+      - docker push --all-tags $$USERNAME/zenml-server
+    id: push-server
+    waitFor:
+      - docker-login
+    entrypoint: bash
+    secretEnv:
+      - USERNAME
+
+timeout: 3600s
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/docker-password/versions/1
+      env: PASSWORD
+    - versionName: projects/$PROJECT_ID/secrets/docker-username/versions/1
+      env: USERNAME

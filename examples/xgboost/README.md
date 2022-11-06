@@ -32,10 +32,10 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
-zenml integration install xgboost -y
+zenml integration install xgboost
 
 # pull example
 zenml example pull xgboost
@@ -43,6 +43,9 @@ cd zenml_examples/xgboost
 
 # initialize
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 ### ▶️ Run the Code

@@ -11,7 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""
+"""Initialization of the ZenML Secret module.
+
 A ZenML Secret is a grouping of key-value pairs. These are accessed and
 administered via the ZenML Secret Manager (a stack component).
 
@@ -22,10 +23,8 @@ point of registration, ZenML will set the schema as `ArbitrarySecretSchema`, a
 kind of default schema where things that aren't attached to a grouping can be
 stored.
 """
-from zenml.secret.arbitrary_secret_schema import (
-    ARBITRARY_SECRET_SCHEMA_TYPE,
-    ArbitrarySecretSchema,
-)
+from zenml.constants import ARBITRARY_SECRET_SCHEMA_TYPE
+from zenml.secret.arbitrary_secret_schema import ArbitrarySecretSchema
 from zenml.secret.base_secret import BaseSecretSchema
 from zenml.secret.secret_schema_class_registry import (
     SecretSchemaClassRegistry,
@@ -33,7 +32,6 @@ from zenml.secret.secret_schema_class_registry import (
 )
 
 __all__ = [
-    "ARBITRARY_SECRET_SCHEMA_TYPE",
     "ArbitrarySecretSchema",
     "BaseSecretSchema",
     "SecretSchemaClassRegistry",

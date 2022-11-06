@@ -1,3 +1,5 @@
+<!-- markdown-link-check-disable -->
+
 # Introduction
 
 Quick intro to ZenML
@@ -59,8 +61,8 @@ How this guide is organized:
 
 ## Support
 - [Roadmap](support/roadmap.md)
-- [Contact](support/contact.md)
-- Contributing Guide
+- [Slack](https://zenml.io/slack-invite)
+- [Contributing Guide](../guidelines/contributing.md)
 
 ZenBytes -> A mlops course using ZenML?
 ZenFiles -> Production-ready pipelines (ZenTemplates?)

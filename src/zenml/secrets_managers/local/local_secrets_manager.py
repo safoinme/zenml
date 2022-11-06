@@ -11,75 +11,112 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-import os
-import uuid
-from pathlib import Path
-from typing import Any, ClassVar, Dict, List
+"""Implementation of the ZenML local secrets manager."""
 
-from pydantic import root_validator
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING, Dict, List, Type, cast
 
 from zenml.cli.utils import error
-from zenml.constants import LOCAL_SECRETS_FILENAME, LOCAL_STORES_DIRECTORY_NAME
+from zenml.config.global_config import GlobalConfiguration
+from zenml.constants import LOCAL_SECRETS_FILENAME
 from zenml.exceptions import SecretExistsError
 from zenml.io.fileio import remove
-from zenml.io.utils import (
-    create_file_if_not_exists,
-    get_global_config_directory,
-)
 from zenml.logger import get_logger
 from zenml.secret import SecretSchemaClassRegistry
-from zenml.secret.base_secret import BaseSecretSchema
-from zenml.secrets_managers.base_secrets_manager import BaseSecretsManager
+from zenml.secrets_managers.base_secrets_manager import (
+    BaseSecretsManager,
+    BaseSecretsManagerConfig,
+    BaseSecretsManagerFlavor,
+)
+from zenml.secrets_managers.utils import decode_secret_dict, encode_secret
 from zenml.utils import yaml_utils
-from zenml.utils.secrets_manager_utils import decode_secret_dict, encode_secret
+from zenml.utils.io_utils import create_file_if_not_exists
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from zenml.secret.base_secret import BaseSecretSchema
+
 
 logger = get_logger(__name__)
+
+
+class LocalSecretsManagerConfig(BaseSecretsManagerConfig):
+    """Configuration for the local secrets manager.
+
+    Attributes:
+        secrets_file: The path to the secrets file.
+    """
+
+    secrets_file: str = ""
+
+    @property
+    def is_local(self) -> bool:
+        """Checks if this stack component is running locally.
+
+        This designation is used to determine if the stack component can be
+        shared with other users or if it is only usable on the local host.
+
+        Returns:
+            True if this config is for a local component, False otherwise.
+        """
+        return True
 
 
 class LocalSecretsManager(BaseSecretsManager):
     """Class for ZenML local file-based secret manager."""
 
-    secrets_file: str = ""
+    @property
+    def config(self) -> LocalSecretsManagerConfig:
+        """Returns the `LocalSecretsManagerConfig` config.
 
-    # Class configuration
-    FLAVOR: ClassVar[str] = "local"
+        Returns:
+            The configuration.
+        """
+        return cast(LocalSecretsManagerConfig, self._config)
 
-    @root_validator(skip_on_failure=True)
-    def set_secrets_file(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        """Sets the secrets_file attribute value according to the component
-        UUID."""
-        if values.get("secrets_file"):
-            return values
+    @property
+    def secrets_file(self) -> str:
+        """Gets the secrets file path.
 
-        # not likely to happen, due to Pydantic validation, but mypy complains
-        assert "uuid" in values
+        If the secrets file was not provided in the config by the user, this
+        will return the default secrets file path based on the component ID.
 
-        values["secrets_file"] = cls.get_secret_store_path(values["uuid"])
-        return values
+        Returns:
+            The secrets file path.
+        """
+        if self.config.secrets_file:
+            return self.config.secrets_file
+        return self.get_default_secret_store_path(self.id)
 
     @staticmethod
-    def get_secret_store_path(uuid: uuid.UUID) -> str:
+    def get_default_secret_store_path(id_: "UUID") -> str:
         """Get the path to the secret store.
 
         Args:
-            uuid: The UUID of the secret store.
+            id_: The ID of the secret store.
 
         Returns:
-            The path to the secret store."""
+            The path to the secret store.
+        """
         return os.path.join(
-            get_global_config_directory(),
-            LOCAL_STORES_DIRECTORY_NAME,
-            str(uuid),
+            GlobalConfiguration().local_stores_path,
+            str(id_),
             LOCAL_SECRETS_FILENAME,
         )
 
     @property
     def local_path(self) -> str:
-        """Path to the local directory where the secrets are stored."""
+        """Path to the local directory where the secrets are stored.
+
+        Returns:
+            The path to the local directory where the secrets are stored.
+        """
         return str(Path(self.secrets_file).parent)
 
     def _create_secrets_file__if_not_exists(self) -> None:
-        """Makes sure the secrets yaml file exists"""
+        """Makes sure the secrets yaml file exists."""
         create_file_if_not_exists(self.secrets_file)
 
     def _verify_secret_key_exists(self, secret_name: str) -> bool:
@@ -89,7 +126,8 @@ class LocalSecretsManager(BaseSecretsManager):
             secret_name: The name of the secret key.
 
         Returns:
-            True if the secret key exists, False otherwise."""
+            True if the secret key exists, False otherwise.
+        """
         self._create_secrets_file__if_not_exists()
         secrets_store_items = yaml_utils.read_yaml(self.secrets_file)
         try:
@@ -98,17 +136,23 @@ class LocalSecretsManager(BaseSecretsManager):
             return False
 
     def _get_all_secrets(self) -> Dict[str, Dict[str, str]]:
+        """Gets all secrets.
+
+        Returns:
+            A dictionary containing all secrets.
+        """
         self._create_secrets_file__if_not_exists()
         return yaml_utils.read_yaml(self.secrets_file) or {}
 
-    def register_secret(self, secret: BaseSecretSchema) -> None:
+    def register_secret(self, secret: "BaseSecretSchema") -> None:
         """Registers a new secret.
 
         Args:
             secret: The secret to register.
 
         Raises:
-            KeyError: If the secret already exists."""
+            SecretExistsError: If the secret already exists.
+        """
         self._create_secrets_file__if_not_exists()
 
         if self._verify_secret_key_exists(secret_name=secret.name):
@@ -119,7 +163,7 @@ class LocalSecretsManager(BaseSecretsManager):
         secrets_store_items[secret.name] = encoded_secret
         yaml_utils.append_yaml(self.secrets_file, secrets_store_items)
 
-    def get_secret(self, secret_name: str) -> BaseSecretSchema:
+    def get_secret(self, secret_name: str) -> "BaseSecretSchema":
         """Gets a specific secret.
 
         Args:
@@ -129,7 +173,8 @@ class LocalSecretsManager(BaseSecretsManager):
             The secret.
 
         Raises:
-            KeyError: If the secret does not exist."""
+            KeyError: If the secret does not exist.
+        """
         self._create_secrets_file__if_not_exists()
 
         secret_store_items = self._get_all_secrets()
@@ -149,20 +194,22 @@ class LocalSecretsManager(BaseSecretsManager):
         """Get all secret keys.
 
         Returns:
-            A list of all secret keys."""
+            A list of all secret keys.
+        """
         self._create_secrets_file__if_not_exists()
 
         secrets_store_items = self._get_all_secrets()
         return list(secrets_store_items.keys())
 
-    def update_secret(self, secret: BaseSecretSchema) -> None:
+    def update_secret(self, secret: "BaseSecretSchema") -> None:
         """Update an existing secret.
 
         Args:
             secret: The secret to update.
 
         Raises:
-            KeyError: If the secret does not exist."""
+            KeyError: If the secret does not exist.
+        """
         self._create_secrets_file__if_not_exists()
 
         if not self._verify_secret_key_exists(secret_name=secret.name):
@@ -180,7 +227,8 @@ class LocalSecretsManager(BaseSecretsManager):
             secret_name: The name of the secret to delete.
 
         Raises:
-            KeyError: If the secret does not exist."""
+            KeyError: If the secret does not exist.
+        """
         self._create_secrets_file__if_not_exists()
 
         if not self._verify_secret_key_exists(secret_name=secret_name):
@@ -193,19 +241,38 @@ class LocalSecretsManager(BaseSecretsManager):
         except KeyError:
             error(f"Secret {secret_name} does not exist.")
 
-    def delete_all_secrets(self, force: bool = False) -> None:
-        """Delete all existing secrets.
-
-        Args:
-            force: If True, delete all secrets.
-
-        Raises:
-            ValueError: If force is False."""
+    def delete_all_secrets(self) -> None:
+        """Delete all existing secrets."""
         self._create_secrets_file__if_not_exists()
-
-        if not force:
-            raise ValueError(
-                "This operation will delete all secrets. "
-                "To confirm, please pass `--yes`."
-            )
         remove(self.secrets_file)
+
+
+class LocalSecretsManagerFlavor(BaseSecretsManagerFlavor):
+    """Class for the `LocalSecretsManagerFlavor`."""
+
+    @property
+    def name(self) -> str:
+        """Name of the flavor.
+
+        Returns:
+            The name of the flavor.
+        """
+        return "local"
+
+    @property
+    def config_class(self) -> Type[LocalSecretsManagerConfig]:
+        """The config class for this flavor.
+
+        Returns:
+            The config class for this flavor.
+        """
+        return LocalSecretsManagerConfig
+
+    @property
+    def implementation_class(self) -> Type["LocalSecretsManager"]:
+        """Implementation class for this flavor.
+
+        Returns:
+            The implementation class for this flavor.
+        """
+        return LocalSecretsManager

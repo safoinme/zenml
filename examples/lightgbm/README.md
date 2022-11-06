@@ -25,6 +25,10 @@ If you're really in a hurry and just want to see this example pipeline run
 without wanting to fiddle around with all the individual installation and
 configuration steps, just run the following:
 
+```shell
+zenml example run lightgbm
+```
+
 ## 👣 Step-by-Step
 
 ### 📄 Prerequisites
@@ -33,10 +37,10 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
-zenml integration install lightgbm -y
+zenml integration install lightgbm
 
 # pull example
 zenml example pull lightgbm
@@ -44,6 +48,9 @@ cd zenml_examples/lightgbm
 
 # initialize
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 ### ▶️ Run the Code
@@ -54,14 +61,16 @@ Now we're ready. Execute:
 python run.py
 ```
 
+Alternatively, if you want to run based on the config.yaml you can run with:
+
+```bash
+zenml pipeline run pipelines/lgbm_pipeline/lgbm_pipeline.py -c config.yaml
+```
+
 ### 🧽 Clean up
 
 In order to clean up, delete the remaining ZenML references.
 
 ```shell
 rm -rf zenml_examples
-```
-
-```shell
-zenml example run lightgbm
 ```

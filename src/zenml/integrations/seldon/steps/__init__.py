@@ -11,8 +11,11 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Initialization for Seldon steps."""
 
 from zenml.integrations.seldon.steps.seldon_deployer import (
-    SeldonDeployerStepConfig,
+    CustomDeployParameters,
+    SeldonDeployerStepParameters,
+    seldon_custom_model_deployer_step,
     seldon_model_deployer_step,
 )

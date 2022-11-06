@@ -11,17 +11,20 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Implementation of the AWS container registry integration."""
+
 import re
-from typing import ClassVar, List, Optional
+from typing import List, Optional, cast
 
 import boto3
 from botocore.exceptions import ClientError
-from pydantic import validator
 
 from zenml.container_registries.base_container_registry import (
     BaseContainerRegistry,
 )
-from zenml.integrations.aws import AWS_CONTAINER_REGISTRY_FLAVOR
+from zenml.integrations.aws.flavors.aws_container_registry_flavor import (
+    AWSContainerRegistryConfig,
+)
 from zenml.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,23 +33,36 @@ logger = get_logger(__name__)
 class AWSContainerRegistry(BaseContainerRegistry):
     """Class for AWS Container Registry."""
 
-    # Class Configuration
-    FLAVOR: ClassVar[str] = AWS_CONTAINER_REGISTRY_FLAVOR
+    @property
+    def config(self) -> AWSContainerRegistryConfig:
+        """Returns the `AWSContainerRegistryConfig` config.
 
-    @validator("uri")
-    def validate_aws_uri(cls, uri: str) -> str:
-        """Validates that the URI is in the correct format."""
-        if "/" in uri:
-            raise ValueError(
-                "Property `uri` can not contain a `/`. An example of a valid "
-                "URI is: `715803424592.dkr.ecr.us-east-1.amazonaws.com`"
+        Returns:
+            The configuration.
+        """
+        return cast(AWSContainerRegistryConfig, self._config)
+
+    def _get_region(self) -> str:
+        """Parses the AWS region from the registry URI.
+
+        Raises:
+            RuntimeError: If the region parsing fails due to an invalid URI.
+
+        Returns:
+            The region string.
+        """
+        match = re.fullmatch(
+            r".*\.dkr\.ecr\.(.*)\.amazonaws\.com", self.config.uri
+        )
+        if not match:
+            raise RuntimeError(
+                f"Unable to parse region from ECR URI {self.config.uri}."
             )
 
-        return uri
+        return match.group(1)
 
     def prepare_image_push(self, image_name: str) -> None:
-        """Logs a warning message if trying to push an image for which no
-        repository exists.
+        """Logs warning message if trying to push an image for which no repository exists.
 
         Args:
             image_name: Name of the docker image that will be pushed.
@@ -54,7 +70,9 @@ class AWSContainerRegistry(BaseContainerRegistry):
         Raises:
             ValueError: If the docker image name is invalid.
         """
-        response = boto3.client("ecr").describe_repositories()
+        response = boto3.client(
+            "ecr", region_name=self._get_region()
+        ).describe_repositories()
         try:
             repo_uris: List[str] = [
                 repository["repositoryUri"]
@@ -67,7 +85,7 @@ class AWSContainerRegistry(BaseContainerRegistry):
 
         repo_exists = any(image_name.startswith(f"{uri}:") for uri in repo_uris)
         if not repo_exists:
-            match = re.search(f"{self.uri}/(.*):.*", image_name)
+            match = re.search(f"{self.config.uri}/(.*):.*", image_name)
             if not match:
                 raise ValueError(f"Invalid docker image name '{image_name}'.")
 
@@ -83,13 +101,16 @@ class AWSContainerRegistry(BaseContainerRegistry):
 
     @property
     def post_registration_message(self) -> Optional[str]:
-        """Optional message that will be printed after the stack component is
-        registered."""
+        """Optional message printed after the stack component is registered.
+
+        Returns:
+            Info message regarding docker repositories in AWS.
+        """
         return (
             "Amazon ECR requires you to create a repository before you can "
             "push an image to it. If you want to for example run a pipeline "
             "using our Kubeflow orchestrator, ZenML will automatically build a "
-            f"docker image called `{self.uri}/zenml-kubeflow:<PIPELINE_NAME>` "
+            f"docker image called `{self.config.uri}/zenml-kubeflow:<PIPELINE_NAME>` "
             f"and try to push it. This will fail unless you create the "
             f"repository `zenml-kubeflow` inside your amazon registry."
         )

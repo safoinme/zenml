@@ -7,20 +7,19 @@ is an awesome project that helps users visualize large amounts of data in a cohe
 Here, we are using the [Boston Housing Price Regression](https://keras.io/api/datasets/boston_housing/) dataset. 
 We create a simple pipeline that returns two pd.DataFrames, one for the training data and one for the test data. 
 In the post-execution workflow we then plug in the visualization class that visualizes the statistics of these 
-dataframes for us. 
+DataFrames for us. 
 
 This visualization is produced with the following code:
 
 ```python
-from zenml.repository import Repository
+from zenml.post_execution import get_pipelines
 from zenml.integrations.facets.visualizers.facet_statistics_visualizer import (
     FacetStatisticsVisualizer,
 )
 
 def visualize_statistics():
-    repo = Repository()
-    pipe = repo.get_pipelines()[-1]
-    importer_outputs = pipe.runs[-1].get_step(name="importer")
+    pipe = get_pipelines()[-1]
+    importer_outputs = pipe.runs[-1].get_step(step="importer")
     FacetStatisticsVisualizer().visualize(importer_outputs)
 
 visualize_statistics()
@@ -49,7 +48,7 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
 zenml integration install tensorflow facets
@@ -60,6 +59,9 @@ cd zenml_examples/facets_visualize_statistics
 
 # Initialize ZenML repo
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 ### ▶️ Run the Code
@@ -68,6 +70,11 @@ Now we're ready. Execute:
 ```bash
 python run.py
 ```
+Alternatively, if you want to run based on the config.yaml you can run with:
+
+```bash
+zenml pipeline run pipelines/facets_pipeline/facets_pipeline.py -c config.yaml
+```
 
 ### 🧽 Clean up
 In order to clean up, delete the remaining ZenML references.
@@ -75,10 +82,3 @@ In order to clean up, delete the remaining ZenML references.
 ```shell
 rm -rf zenml_examples
 ```
-
-# 📜 Learn more
-
-Our docs regarding the facets integration can be found [here](TODO: Link to docs).
-
-If you want to learn more about visualizers in general or about how to build your own visualizers in zenml
-check out our [docs](TODO: Link to docs)

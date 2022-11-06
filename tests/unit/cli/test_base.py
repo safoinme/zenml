@@ -18,8 +18,8 @@ from click.testing import CliRunner
 
 from zenml.cli.base import clean, init
 from zenml.constants import CONFIG_FILE_NAME, REPOSITORY_DIRECTORY_NAME
-from zenml.io.utils import get_global_config_directory
 from zenml.utils import yaml_utils
+from zenml.utils.io_utils import get_global_config_directory
 
 
 def test_init_creates_zen_folder(tmp_path: Path) -> None:
@@ -29,7 +29,7 @@ def test_init_creates_zen_folder(tmp_path: Path) -> None:
     assert (tmp_path / REPOSITORY_DIRECTORY_NAME).exists()
 
 
-def test_clean_user_config(clean_repo) -> None:
+def test_clean_user_config(clean_client) -> None:
     global_zen_config_yaml = (
         Path(get_global_config_directory()) / CONFIG_FILE_NAME
     )

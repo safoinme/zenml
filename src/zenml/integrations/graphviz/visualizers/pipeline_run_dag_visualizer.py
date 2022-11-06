@@ -11,7 +11,9 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Implementation of the Graphviz pipeline run DAG visualizer."""
 
+import shutil
 import tempfile
 from abc import abstractmethod
 from typing import Any
@@ -20,7 +22,7 @@ import graphviz
 
 from zenml.logger import get_logger
 from zenml.post_execution import PipelineRunView
-from zenml.visualizers import BasePipelineRunVisualizer
+from zenml.visualizers import BaseVisualizer
 
 logger = get_logger(__name__)
 
@@ -28,7 +30,7 @@ logger = get_logger(__name__)
 #  should use graphviz to show the pipeline perhaps (not the run).
 
 
-class PipelineRunDagVisualizer(BasePipelineRunVisualizer):
+class PipelineRunDagVisualizer(BaseVisualizer):
     """Visualize the lineage of runs in a pipeline."""
 
     ARTIFACT_DEFAULT_COLOR = "blue"
@@ -44,10 +46,27 @@ class PipelineRunDagVisualizer(BasePipelineRunVisualizer):
     def visualize(
         self, object: PipelineRunView, *args: Any, **kwargs: Any
     ) -> graphviz.Digraph:
-        """Creates a pipeline lineage diagram using graphviz."""
+        """Creates a pipeline lineage diagram using graphviz.
+
+        Args:
+            object: The pipeline run view to visualize.
+            *args: Additional arguments to pass to the visualization.
+            **kwargs: Additional keyword arguments to pass to the visualization.
+
+        Returns:
+            A graphviz digraph object.
+
+        Raises:
+            RuntimeError: If the `dot` package isn't installed.
+        """
         logger.warning(
             "This integration is not completed yet. Results might be unexpected."
         )
+        if not shutil.which("dot"):
+            raise RuntimeError(
+                "Unable to find the `dot` package on your system. Please "
+                "install it (https://graphviz.org/download/) and try again."
+            )
 
         dot = graphviz.Digraph(comment=object.name)
 
@@ -64,7 +83,7 @@ class PipelineRunDagVisualizer(BasePipelineRunVisualizer):
             for artifact_name, artifact in step.outputs.items():
                 dot.node(
                     self.ARTIFACT_PREFIX + str(artifact.id),
-                    f"{artifact_name} \n" f"({artifact._data_type})",
+                    f"{artifact_name} \n" f"({artifact.data_type})",
                     shape=self.ARTIFACT_SHAPE,
                 )
                 dot.edge(

@@ -1,3 +1,6 @@
+<!-- Remove these comments -->
+<!-- markdown-link-check-disable -->
+
 # <FITTING EMOJI] <NAME OF THE INTEGRATION AND WHAT IT DOES>
 
 <MOTIVATION OF WHY THIS IS RELEVANT>
@@ -47,7 +50,7 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install zenml[server]
 
 # install ZenML integrations
 zenml integration install <NAMES OF THE INTEGRATIONS>
@@ -58,6 +61,9 @@ cd zenml_examples/<NAME OF THE EXAMPLE>
 
 # Initialize ZenML repo
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 ### ▶️ Run the Code
@@ -82,5 +88,5 @@ Our docs regarding the <NAME OF THE INTEGRATION> integration can be
 found [here](<LINK TO THE DOCS>).
 
 If you want to learn more about <EXAMPLE_TYPE> in general or about how to build
-your own <TYPE OF THE INTEGRATION> in zenml
-check out our [docs](<LINK TO THE DOCS>)
+your own <TYPE OF THE INTEGRATION> in ZenML
+check out our [docs](<LINK TO THE DOCS>).

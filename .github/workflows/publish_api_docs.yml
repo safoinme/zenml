@@ -5,49 +5,67 @@ name: Publish API Docs
 on:
   push:
     branches:
-      - 'release/**'
+      - "release/**"
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   # This workflow contains a single job called "publish"
   publish:
-    name: Build and publish the api docs to S3
+    name: Build 🔨 and publish 📰 the api docs 📁 to gh-pages
     runs-on: ubuntu-latest
     env:
       ZENML_DEBUG: 1
       ZENML_ANALYTICS_OPT_IN: false
+      PYTHONIOENCODING: "utf-8"
+
     steps:
-    - uses: actions/checkout@v2
-      with:
-        fetch-depth: 0
-    - uses: actions/setup-node@v2
-      with:
-        node-version: '14'
-    - run: npm install
-    - run: npm install html-minifier -g
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0 # fetch all commits/branches including gh-pages
 
-    - name: Get the version from the github branch name
-      id: get_version
-      run: |
-        BRANCH='${{github.ref_name}}'
-        echo ::set-output name=VERSION::${BRANCH#release/}
+      - name: Get the version from the github branch name
+        id: get_version
+        run: |
+          BRANCH='${{github.ref_name}}'
+          echo ::set-output name=VERSION::${BRANCH#release/}
 
-    - name: Install poetry
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install "poetry"
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
 
-    - name: Install Dependencies
-      run: |
-        python -m poetry install
-        python -m poetry run zenml integration install -y
-        python -m poetry run pip install click~=8.0.3 typing-extensions~=3.10.0.2
-        python -m poetry run pip install awscli
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "14"
+      - run: npm install
+      - run: npm install html-minifier -g
 
-    - name: Setup git user
-      run: |
-        git config --global user.name 'Code Monkey'
-        git config --global user.email 'codemonkey@zenml.io'
+      - name: Setup environment with Poetry
+        uses: ./.github/actions/setup_environment
+        with:
+          cache_version: ${{ secrets.GH_ACTIONS_CACHE_KEY }}
 
-    - name: Runs docs generation
-      run: poetry run bash scripts/generate-docs.sh -s src/zenml/ --push --latest -v ${{ steps.get_version.outputs.VERSION }}
+      # IMPORTANT: there's a strategy to installing integrations here in a way
+      # that avoids conflicts while at the same time making it possible for all
+      # ZenML Python modules to be imported, especially the integration modules:
+      # 1. install zenml with all extras with poetry
+      # 2. install more restrictive integrations first: feast, seldon and
+      # label_studio are currently the ones known to be very restrictive in
+      # terms of what versions of dependencies they require
+      # 3. install the rest of the integrations
+      # 4. as the last step, install zenml again (step 1. repeated)
+      - name: Install Dependencies
+        run: |
+          source $VENV
+          zenml integration install -y feast
+          zenml integration install -y label_studio seldon
+          zenml integration install -y --ignore-integration feast --ignore-integration label_studio --ignore-integration seldon
+          poetry install --extras server
+
+      - name: Setup git user
+        run: |
+          git config --global user.name 'Code Monkey'
+          git config --global user.email 'codemonkey@zenml.io'
+
+      - name: Runs docs generation
+        run: poetry run bash scripts/generate-docs.sh -s src/zenml/ --push --latest -v ${{ steps.get_version.outputs.VERSION }}

@@ -13,10 +13,13 @@ repos:
 
   - repo: local
     hooks:
-      - id: spellcheck
-        name: spellcheck
-        entry: poetry run bash scripts/check-spelling.sh
+      - id: docstringcheck
+        name: docstringcheck
+        entry: poetry run bash scripts/docstring.sh
         language: system
+        files: ^src/zenml/
+        types: [file, python]
+        pass_filenames: false
 
   - repo: local
     hooks:

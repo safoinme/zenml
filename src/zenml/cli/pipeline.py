@@ -11,103 +11,27 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""CLI to interact with pipelines."""
-import os.path
-import textwrap
-import types
-from typing import Any, Dict
+"""CLI functionality to interact with pipelines."""
+
+
+from uuid import UUID
 
 import click
 
+from zenml.cli import utils as cli_utils
 from zenml.cli.cli import TagGroup, cli
-from zenml.config.config_keys import (
-    PipelineConfigurationKeys,
-    SourceConfigurationKeys,
-    StepConfigurationKeys,
-)
+from zenml.client import Client
 from zenml.enums import CliCategories
-from zenml.exceptions import PipelineConfigurationError
+from zenml.exceptions import EntityExistsError
 from zenml.logger import get_logger
-from zenml.utils import source_utils, yaml_utils
+from zenml.utils.uuid_utils import is_valid_uuid
 
 logger = get_logger(__name__)
 
 
-def _load_class_from_module(
-    module: types.ModuleType, config_item: Dict[str, str]
-) -> Any:
-    """Based on a config item from the config yaml the corresponding module
-    attribute is loaded.
-
-    Args:
-        module: Base module to use for import if only a function/class name is
-                supplied
-        config_item: Config item loaded from the config yaml
-                        - it will have a function/class name and
-                        optionally a relative filepath
-                        (e.g {`file`: `steps/steps.py`, `name`: `step_name`}
-
-    Returns:
-         imported function/class
-    """
-    if isinstance(config_item, dict):
-        if SourceConfigurationKeys.FILE_ in config_item:
-            module = source_utils.import_python_file(
-                config_item[SourceConfigurationKeys.FILE_]
-            )
-
-        implementation_name = config_item[SourceConfigurationKeys.NAME_]
-        implemented_class = _get_module_attribute(module, implementation_name)
-        return implemented_class
-    else:
-        correct_input = textwrap.dedent(
-            f"""
-        {SourceConfigurationKeys.NAME_}: ClassName
-        {SourceConfigurationKeys.FILE_}: optional/filepath.py
-        """
-        )
-        raise PipelineConfigurationError(
-            "Only `dict` values are allowed for "
-            "'step_source' attribute of a step configuration. You "
-            f"tried to pass in `{config_item}` (type: "
-            f"`{type(config_item).__name__}`). \n"
-            "You will now need to pass a dictionary. This dictionary "
-            f"**has to** contain a `{SourceConfigurationKeys.NAME_}` which "
-            "refers to the function/class name. If this entity is defined "
-            "outside the main module, you will need to additionally supply a "
-            f"{SourceConfigurationKeys.FILE_} with the relative forward-slash-"
-            "separated path to the file. \n"
-            "A correct configuration would look a bit like this:"
-            f"{correct_input}"
-        )
-
-
-def _get_module_attribute(module: types.ModuleType, attribute_name: str) -> Any:
-    """Gets an attribute from a module.
-
-    Args:
-        module: The module to load the attribute from.
-        attribute_name: Name of the attribute to load.
-
-    Returns:
-        The attribute value.
-
-    Raises:
-        PipelineConfigurationError: If the module does not have an attribute
-            with the given name.
-    """
-    try:
-        return getattr(module, attribute_name)
-    except AttributeError:
-        raise PipelineConfigurationError(
-            f"Unable to load '{attribute_name}' from"
-            f" file '{module.__file__}'"
-        ) from None
-
-
 @cli.group(cls=TagGroup, tag=CliCategories.MANAGEMENT_TOOLS)
 def pipeline() -> None:
-    """Run pipelines."""
+    """List, run, or delete pipelines."""
 
 
 @pipeline.command("run", help="Run a pipeline with the given configuration.")
@@ -119,91 +43,195 @@ def pipeline() -> None:
     required=True,
 )
 @click.argument("python_file")
-def run_pipeline(python_file: str, config_path: str) -> None:
+def cli_pipeline_run(python_file: str, config_path: str) -> None:
     """Runs pipeline specified by the given config YAML object.
 
     Args:
         python_file: Path to the python file that defines the pipeline.
         config_path: Path to configuration YAML file.
     """
-    # If the file was run with `python run.py, this would happen automatically.
-    #  In order to allow seamless switching between running directly and through
-    #  zenml, this is done at this point
-    with source_utils.prepend_python_path(
-        os.path.abspath(os.path.dirname(python_file))
-    ):
+    from zenml.pipelines.run_pipeline import run_pipeline
 
-        module = source_utils.import_python_file(python_file)
-        config = yaml_utils.read_yaml(config_path)
-        PipelineConfigurationKeys.key_check(config)
+    run_pipeline(python_file=python_file, config_path=config_path)
 
-        pipeline_name = config[PipelineConfigurationKeys.NAME]
-        pipeline_class = _get_module_attribute(module, pipeline_name)
 
-        steps = {}
-        for step_name, step_config in config[
-            PipelineConfigurationKeys.STEPS
-        ].items():
-            StepConfigurationKeys.key_check(step_config)
-            source = step_config[StepConfigurationKeys.SOURCE_]
-            step_class = _load_class_from_module(module, source)
+@pipeline.command("list", help="List all registered pipelines.")
+def list_pipelines() -> None:
+    """List all registered pipelines."""
+    cli_utils.print_active_config()
+    pipelines = Client().zen_store.list_pipelines(
+        project_name_or_id=Client().active_project.id
+    )
+    if not pipelines:
+        cli_utils.declare("No piplines registered.")
+        return
 
-            step_instance = step_class()
-            materializers_config = step_config.get(
-                StepConfigurationKeys.MATERIALIZERS_, None
+    cli_utils.print_pydantic_models(
+        pipelines,
+        exclude_columns=["id", "created", "updated", "user", "project"],
+    )
+
+
+@pipeline.command("delete")
+@click.argument("pipeline_name_or_id", type=str, required=True)
+def delete_pipeline(pipeline_name_or_id: str) -> None:
+    """Delete a pipeline.
+
+    Args:
+        pipeline_name_or_id: The name or ID of the pipeline to delete.
+    """
+    cli_utils.print_active_config()
+    active_project_id = Client().active_project.id
+    assert active_project_id is not None
+    try:
+        client = Client()
+        if is_valid_uuid(pipeline_name_or_id):
+            pipeline = client.zen_store.get_pipeline(UUID(pipeline_name_or_id))
+        else:
+            pipeline = client.zen_store.get_pipeline_in_project(
+                pipeline_name=pipeline_name_or_id,
+                project_name_or_id=active_project_id,
             )
-            if materializers_config:
-                # We need to differentiate whether it's a single materializer
-                # or a dictionary mapping output names to materializers
-                if isinstance(materializers_config, str):
-                    correct_input = textwrap.dedent(
-                        f"""
-                    {SourceConfigurationKeys.NAME_}: {materializers_config}
-                    {SourceConfigurationKeys.FILE_}: optional/filepath.py
-                    """
-                    )
+    except KeyError as err:
+        cli_utils.error(str(err))
+    confirmation = cli_utils.confirmation(
+        f"Are you sure you want to delete pipeline `{pipeline_name_or_id}`? "
+        "This will change all existing runs of this pipeline to become "
+        "unlisted."
+    )
+    if not confirmation:
+        cli_utils.declare("Pipeline deletion canceled.")
+        return
+    assert pipeline.id is not None
+    Client().zen_store.delete_pipeline(pipeline_id=pipeline.id)
+    cli_utils.declare(f"Deleted pipeline '{pipeline_name_or_id}'.")
 
-                    raise PipelineConfigurationError(
-                        "As of ZenML version 0.8.0 `str` entries are no "
-                        "longer supported "
-                        "to define steps or materializers. Instead you will "
-                        "now need to "
-                        "pass a dictionary. This dictionary **has to** "
-                        "contain a "
-                        f"`{SourceConfigurationKeys.NAME_}` which refers to "
-                        f"the function/"
-                        "class name. If this entity is defined outside the "
-                        "main module,"
-                        "you will need to additionally supply a "
-                        f"{SourceConfigurationKeys.FILE_} with the relative "
-                        f"forward-slash-"
-                        "separated path to the file. \n"
-                        f"You tried to pass in `{materializers_config}` "
-                        f"- however you should have specified the name "
-                        f"(and file) like this: \n "
-                        f"{correct_input}"
-                    )
-                elif isinstance(materializers_config, dict):
-                    materializers = {
-                        output_name: _load_class_from_module(module, source)
-                        for output_name, source in materializers_config.items()
-                    }
-                else:
-                    raise PipelineConfigurationError(
-                        f"Only `str` and `dict` values are allowed for "
-                        f"'materializers' attribute of a step configuration. You "
-                        f"tried to pass in `{materializers_config}` (type: "
-                        f"`{type(materializers_config).__name__}`)."
-                    )
-                step_instance = step_instance.with_return_materializers(
-                    materializers
-                )
 
-            steps[step_name] = step_instance
-        pipeline_instance = pipeline_class(**steps).with_config(
-            config_path, overwrite_step_parameters=True
+@pipeline.group()
+def runs() -> None:
+    """Commands for pipeline runs."""
+
+
+@click.option("--pipeline", "-p", type=str, required=False)
+@click.option("--stack", "-s", type=str, required=False)
+@click.option("--user", "-u", type=str, required=False)
+@click.option("--unlisted", is_flag=True)
+@runs.command("list", help="List all registered pipeline runs.")
+def list_pipeline_runs(
+    pipeline: str, stack: str, user: str, unlisted: bool = False
+) -> None:
+    """List all registered pipeline runs.
+
+    Args:
+        pipeline: If provided, only return runs for this pipeline.
+        stack: If provided, only return runs for this stack.
+        user: If provided, only return runs for this user.
+        unlisted: If True, only return unlisted runs that are not
+            associated with any pipeline.
+    """
+    cli_utils.print_active_config()
+    try:
+        stack_id, pipeline_id, user_id = None, None, None
+        client = Client()
+        if stack:
+            stack_id = cli_utils.get_stack_by_id_or_name_or_prefix(
+                client=client, id_or_name_or_prefix=stack
+            ).id
+        if pipeline:
+            pipeline_id = client.get_pipeline_by_name(pipeline).id
+        if user:
+            user_id = client.zen_store.get_user(user).id
+        pipeline_runs = Client().zen_store.list_runs(
+            project_name_or_id=Client().active_project.id,
+            user_name_or_id=user_id,
+            pipeline_id=pipeline_id,
+            stack_id=stack_id,
+            unlisted=unlisted,
         )
-        logger.debug(
-            "Finished setting up pipeline '%s' from CLI", pipeline_name
+    except KeyError as err:
+        cli_utils.error(str(err))
+    if not pipeline_runs:
+        cli_utils.declare("No pipeline runs registered.")
+        return
+
+    cli_utils.print_pipeline_runs_table(
+        client=client, pipeline_runs=pipeline_runs
+    )
+
+
+@runs.command("export", help="Export all pipeline runs to a YAML file.")
+@click.argument("filename", type=str, required=True)
+def export_pipeline_runs(filename: str) -> None:
+    """Export all pipeline runs to a YAML file.
+
+    Args:
+        filename: The filename to export the pipeline runs to.
+    """
+    cli_utils.print_active_config()
+    client = Client()
+    client.export_pipeline_runs(filename=filename)
+
+
+@runs.command("import", help="Import pipeline runs from a YAML file.")
+@click.argument("filename", type=str, required=True)
+def import_pipeline_runs(filename: str) -> None:
+    """Import pipeline runs from a YAML file.
+
+    Args:
+        filename: The filename from which to import the pipeline runs.
+    """
+    cli_utils.print_active_config()
+    client = Client()
+    try:
+        client.import_pipeline_runs(filename=filename)
+    except EntityExistsError as err:
+        cli_utils.error(str(err))
+
+
+@runs.command(
+    "migrate",
+    help="Migrate pipeline runs from an existing metadata store database.",
+)
+@click.argument("database", type=str, required=True)
+@click.option("--database_type", type=str, default="sqlite", required=False)
+@click.option("--mysql_host", type=str, required=False)
+@click.option("--mysql_port", type=int, default=3306, required=False)
+@click.option("--mysql_username", type=str, required=False)
+@click.option("--mysql_password", type=str, required=False)
+def migrate_pipeline_runs(
+    database: str,
+    database_type: str,
+    mysql_host: str,
+    mysql_port: int,
+    mysql_username: str,
+    mysql_password: str,
+) -> None:
+    """Migrate pipeline runs from a metadata store of ZenML < 0.20.0.
+
+    Args:
+        database: The metadata store database from which to migrate the pipeline
+            runs.
+        database_type: The type of the metadata store database (sqlite | mysql).
+        mysql_host: The host of the MySQL database.
+        mysql_port: The port of the MySQL database.
+        mysql_username: The username of the MySQL database.
+        mysql_password: The password of the MySQL database.
+    """
+    cli_utils.print_active_config()
+    client = Client()
+    try:
+        client.migrate_pipeline_runs(
+            database=database,
+            database_type=database_type,
+            mysql_host=mysql_host,
+            mysql_port=mysql_port,
+            mysql_username=mysql_username,
+            mysql_password=mysql_password,
         )
-        pipeline_instance.run()
+    except (
+        EntityExistsError,
+        NotImplementedError,
+        RuntimeError,
+        ValueError,
+    ) as err:
+        cli_utils.error(str(err))

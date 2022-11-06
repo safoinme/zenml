@@ -11,48 +11,32 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Initialization for step interfaces."""
+
+from zenml.steps.step_interfaces.base_alerter_step import (
+    BaseAlerterStep,
+    BaseAlerterStepParameters,
+)
 from zenml.steps.step_interfaces.base_analyzer_step import (
-    BaseAnalyzerConfig,
+    BaseAnalyzerParameters,
     BaseAnalyzerStep,
 )
 from zenml.steps.step_interfaces.base_datasource_step import (
-    BaseDatasourceConfig,
+    BaseDatasourceParameters,
     BaseDatasourceStep,
 )
 from zenml.steps.step_interfaces.base_drift_detection_step import (
-    BaseDriftDetectionConfig,
+    BaseDriftDetectionParameters,
     BaseDriftDetectionStep,
-)
-from zenml.steps.step_interfaces.base_evaluator_step import (
-    BaseEvaluatorConfig,
-    BaseEvaluatorStep,
-)
-from zenml.steps.step_interfaces.base_preprocessor_step import (
-    BasePreprocessorConfig,
-    BasePreprocessorStep,
-)
-from zenml.steps.step_interfaces.base_split_step import (
-    BaseSplitStep,
-    BaseSplitStepConfig,
-)
-from zenml.steps.step_interfaces.base_trainer_step import (
-    BaseTrainerConfig,
-    BaseTrainerStep,
 )
 
 __all__ = [
-    "BaseAnalyzerConfig",
+    "BaseAnalyzerParameters",
     "BaseAnalyzerStep",
-    "BaseDatasourceConfig",
+    "BaseDatasourceParameters",
     "BaseDatasourceStep",
-    "BaseDriftDetectionConfig",
+    "BaseDriftDetectionParameters",
     "BaseDriftDetectionStep",
-    "BaseEvaluatorConfig",
-    "BaseEvaluatorStep",
-    "BasePreprocessorConfig",
-    "BasePreprocessorStep",
-    "BaseSplitStep",
-    "BaseSplitStepConfig",
-    "BaseTrainerStep",
-    "BaseTrainerConfig",
+    "BaseAlerterStep",
+    "BaseAlerterStepParameters",
 ]

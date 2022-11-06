@@ -1,12 +1,26 @@
+#  Copyright (c) ZenML GmbH 2022. All Rights Reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at:
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+#  or implied. See the License for the specific language governing
+#  permissions and limitations under the License.
+"""Step context class."""
+
 from typing import TYPE_CHECKING, Dict, NamedTuple, Optional, Type, cast
 
+from zenml.client import Client
 from zenml.exceptions import StepContextError
-from zenml.repository import Repository
 
 if TYPE_CHECKING:
     from zenml.artifacts.base_artifact import BaseArtifact
     from zenml.materializers.base_materializer import BaseMaterializer
-    from zenml.metadata_stores.base_metadata_store import BaseMetadataStore
     from zenml.stack import Stack
 
 
@@ -20,8 +34,8 @@ class StepContextOutput(NamedTuple):
 class StepContext:
     """Provides additional context inside a step function.
 
-    This class is used to access the metadata store, materializers and
-    artifacts inside a step function. To use it, add a `StepContext` object
+    This class is used to access pipelines, materializers, and artifacts
+    inside a step function. To use it, add a `StepContext` object
     to the signature of your step function like this:
 
     ```python
@@ -76,8 +90,7 @@ class StepContext:
             )
             for key in output_materializers.keys()
         }
-        self._metadata_store = Repository().active_stack.metadata_store
-        self._stack = Repository().active_stack
+        self._stack = Client().active_stack
 
     def _get_output(
         self, output_name: Optional[str] = None
@@ -124,17 +137,12 @@ class StepContext:
             return next(iter(self._outputs.values()))
 
     @property
-    def metadata_store(self) -> "BaseMetadataStore":
-        """
-        Returns an instance of the metadata store that is used to store
-        metadata about the step (and the corresponding pipeline) which is
-        being executed.
-        """
-        return self._metadata_store
-
-    @property
     def stack(self) -> Optional["Stack"]:
-        """Returns the current active stack."""
+        """Returns the current active stack.
+
+        Returns:
+            The current active stack or None.
+        """
         return self._stack
 
     def get_output_materializer(
@@ -157,11 +165,6 @@ class StepContext:
         Returns:
             A materializer initialized with the output artifact for
             the given output.
-
-        Raises:
-            StepContextError: If the step has no outputs, no output for
-                              the given `output_name` or if no `output_name`
-                              was given but the step has multiple outputs.
         """
         materializer_class, artifact = self._get_output(output_name)
         # use custom materializer class if provided or fallback to default
@@ -180,10 +183,5 @@ class StepContext:
 
         Returns:
             Artifact URI for the given output.
-
-        Raises:
-            StepContextError: If the step has no outputs, no output for
-                              the given `output_name` or if no `output_name`
-                              was given but the step has multiple outputs.
         """
         return cast(str, self._get_output(output_name).artifact.uri)

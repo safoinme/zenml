@@ -33,10 +33,10 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
-zenml integration install neural_prophet -y
+zenml integration install neural_prophet
 
 # pull example
 zenml example pull neural_prophet
@@ -44,6 +44,9 @@ cd zenml_examples/neural_prophet
 
 # Initialize ZenML repo
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 ### ▶️ Run the Code
@@ -54,7 +57,13 @@ Now we're ready. Execute:
 python run.py
 ```
 
-After running the pipeline, you may inspect the accompanying notebook to visalize results:
+Alternatively, if you want to run based on the config.yaml you can run with:
+
+```bash
+zenml pipeline run pipelines/neural_prophet_pipeline/neural_prophet_pipeline.py -c config.yaml
+```
+
+After running the pipeline, you may inspect the accompanying notebook to visualize results:
 
 ```shell
 jupyter notebook

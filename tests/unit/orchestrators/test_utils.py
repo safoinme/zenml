@@ -12,29 +12,30 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 
+
 import json
+import os
 
-import pytest
-from tfx.orchestration.portable.data_types import ExecutionInfo
-from tfx.proto.orchestration.pipeline_pb2 import PipelineInfo
-
+from zenml.client import Client
 from zenml.orchestrators.utils import get_cache_status
-from zenml.repository import Repository
-from zenml.steps.utils import (
-    INTERNAL_EXECUTION_PARAMETER_PREFIX,
-    PARAM_PIPELINE_PARAMETER_NAME,
+from zenml.pipelines import pipeline
+from zenml.steps import step
+from zenml.utils.proto_utils import (
+    MLMD_CONTEXT_PIPELINE_CONFIG_PROPERTY_NAME,
+    MLMD_CONTEXT_STACK_PROPERTY_NAME,
+    MLMD_CONTEXT_STEP_CONFIG_PROPERTY_NAME,
+    ZENML_MLMD_CONTEXT_TYPE,
 )
 
 
 def test_get_cache_status_raises_no_error_when_none_passed():
     """Ensure get_cache_status raises no error when None is passed."""
-    try:
-        get_cache_status(None)
-    except AttributeError:
-        pytest.fail("`get_cache_status()` raised an `AttributeError`")
+    get_cache_status(None)
 
 
-def test_get_cache_status_works_when_running_pipeline_twice():
+def test_get_cache_status_works_when_running_pipeline_twice(
+    clean_client, mocker
+):
     """Check that steps are cached when a pipeline is run twice successively."""
     from zenml.pipelines import pipeline
     from zenml.steps import step
@@ -53,30 +54,80 @@ def test_get_cache_status_works_when_running_pipeline_twice():
         step_one=step_one(),
     )
 
+    def _expect_not_cached(execution_info):
+        return_value = get_cache_status(execution_info)
+        assert return_value is False
+        return return_value
+
+    def _expect_cached(execution_info):
+        return_value = get_cache_status(execution_info)
+        assert return_value is True
+        return return_value
+
+    mock = mocker.patch(
+        "zenml.orchestrators.base_orchestrator.get_cache_status",
+        side_effect=_expect_not_cached,
+    )
     pipeline.run()
+    mock.assert_called_once()
+
+    mock = mocker.patch(
+        "zenml.orchestrators.base_orchestrator.get_cache_status",
+        side_effect=_expect_cached,
+    )
     pipeline.run()
+    mock.assert_called_once()
 
-    pipeline = Repository().get_pipeline("some_pipeline")
-    first_run = pipeline.runs[-2]
-    second_run = pipeline.runs[-1]
 
-    step_name_param = (
-        INTERNAL_EXECUTION_PARAMETER_PREFIX + PARAM_PIPELINE_PARAMETER_NAME
-    )
-    properties_param = json.dumps("step_one")
-    pipeline_id = pipeline.name
-    first_run_id = first_run.name
-    second_run_id = second_run.name
-    first_run_execution_object = ExecutionInfo(
-        exec_properties={step_name_param: properties_param},
-        pipeline_info=PipelineInfo(id=pipeline_id),
-        pipeline_run_id=first_run_id,
-    )
-    second_run_execution_object = ExecutionInfo(
-        exec_properties={step_name_param: properties_param},
-        pipeline_info=PipelineInfo(id=pipeline_id),
-        pipeline_run_id=second_run_id,
+def test_pipeline_storing_context_in_the_metadata_store():
+    """Tests that storing the ZenML context in the metadata store works."""
+
+    @step
+    def some_step_1() -> int:
+        return 3
+
+    @pipeline
+    def p(step_):
+        step_()
+
+    pipeline_ = p(some_step_1())
+    pipeline_.run()
+
+    client = Client()
+    contexts = client.zen_store._metadata_store.store.get_contexts_by_type(
+        ZENML_MLMD_CONTEXT_TYPE
     )
 
-    assert get_cache_status(first_run_execution_object) is False
-    assert get_cache_status(second_run_execution_object) is True
+    assert len(contexts) == 1
+
+    assert contexts[0].custom_properties[
+        MLMD_CONTEXT_STACK_PROPERTY_NAME
+    ].string_value == json.dumps(client.active_stack.dict(), sort_keys=True)
+
+    from zenml.config.compiler import Compiler
+    from zenml.config.pipeline_configurations import PipelineRunConfiguration
+
+    compiled = Compiler().compile(
+        pipeline=pipeline_,
+        stack=client.active_stack,
+        run_configuration=PipelineRunConfiguration(),
+    )
+    dag_filepath = os.path.abspath(__file__)
+    compiled.pipeline.extra["dag_filepath"] = dag_filepath
+    compiled.steps["step_"].config.extra["dag_filepath"] = dag_filepath
+
+    expected_pipeline_config = compiled.pipeline.json(sort_keys=True)
+    assert (
+        contexts[0]
+        .custom_properties[MLMD_CONTEXT_PIPELINE_CONFIG_PROPERTY_NAME]
+        .string_value
+        == expected_pipeline_config
+    )
+
+    expected_step_config = compiled.steps["step_"].json(sort_keys=True)
+    assert (
+        contexts[0]
+        .custom_properties[MLMD_CONTEXT_STEP_CONFIG_PROPERTY_NAME]
+        .string_value
+        == expected_step_config
+    )

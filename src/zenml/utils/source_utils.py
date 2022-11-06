@@ -11,7 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""
+"""Utility functions for source code.
+
 These utils are predicated on the following definitions:
 
 * class_source: This is a python-import type path to a class, e.g.
@@ -32,6 +33,7 @@ import site
 import sys
 import types
 from contextlib import contextmanager
+from distutils.sysconfig import get_python_lib
 from types import (
     CodeType,
     FrameType,
@@ -40,16 +42,27 @@ from types import (
     ModuleType,
     TracebackType,
 )
-from typing import Any, Callable, Iterator, Optional, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterator,
+    List,
+    Optional,
+    Type,
+    Union,
+)
 
-from zenml import __version__
-from zenml.constants import APP_NAME
+from zenml import __version__, constants
 from zenml.enums import StackComponentType
 from zenml.environment import Environment
 from zenml.logger import get_logger
-from zenml.stack import StackComponent
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from zenml.stack.flavor import Flavor
+    from zenml.stack.stack_component import StackComponentConfig
 
 
 def is_standard_pin(pin: str) -> bool:
@@ -57,17 +70,27 @@ def is_standard_pin(pin: str) -> bool:
 
     Args:
         pin: potential ZenML pin like 'zenml_0.1.1'
+
+    Returns:
+        `True` if pin is valid ZenML pin, else False.
     """
-    if pin.startswith(f"{APP_NAME}_"):
+    if pin.startswith(f"{constants.APP_NAME}_"):
         return True
     return False
 
 
 def is_inside_repository(file_path: str) -> bool:
-    """Returns whether a file is inside a zenml repository."""
-    from zenml.repository import Repository
+    """Returns whether a file is inside a zenml repository.
 
-    repo_path = Repository.find_repository()
+    Args:
+        file_path: A file path.
+
+    Returns:
+        `True` if the file is inside a zenml repository, else `False`.
+    """
+    from zenml.client import Client
+
+    repo_path = Client.find_repository()
     if not repo_path:
         return False
 
@@ -77,19 +100,35 @@ def is_inside_repository(file_path: str) -> bool:
 
 
 def is_third_party_module(file_path: str) -> bool:
-    """Returns whether a file belongs to a third party package."""
+    """Returns whether a file belongs to a third party package.
+
+    Args:
+        file_path: A file path.
+
+    Returns:
+        `True` if the file belongs to a third party package, else `False`.
+    """
     absolute_file_path = pathlib.Path(file_path).resolve()
 
-    for path in site.getsitepackages() + [site.getusersitepackages()]:
+    for path in site.getsitepackages() + [
+        site.getusersitepackages(),
+        get_python_lib(standard_lib=True),
+    ]:
         if pathlib.Path(path).resolve() in absolute_file_path.parents:
             return True
 
-    return False
+    return (
+        pathlib.Path(get_source_root_path()) not in absolute_file_path.parents
+    )
 
 
 def create_zenml_pin() -> str:
-    """Creates a ZenML pin for source pinning from release version."""
-    return f"{APP_NAME}_{__version__}"
+    """Creates a ZenML pin for source pinning from release version.
+
+    Returns:
+        ZenML pin.
+    """
+    return f"{constants.APP_NAME}_{__version__}"
 
 
 def resolve_standard_source(source: str) -> str:
@@ -97,6 +136,12 @@ def resolve_standard_source(source: str) -> str:
 
     Args:
         source: class_source e.g. this.module.Class.
+
+    Returns:
+        ZenML pin.
+
+    Raises:
+        AssertionError: If source is already pinned.
     """
     if "@" in source:
         raise AssertionError(f"source {source} is already pinned.")
@@ -109,31 +154,13 @@ def is_standard_source(source: str) -> bool:
 
     Args:
         source: class_source e.g. this.module.Class[@pin].
+
+    Returns:
+        `True` if source is a standard ZenML source, else `False`.
     """
     if source.split(".")[0] == "zenml":
         return True
     return False
-
-
-def get_class_source_from_source(source: str) -> str:
-    """Gets class source from source, i.e. module.path@version, returns version.
-
-    Args:
-        source: source pointing to potentially pinned sha.
-    """
-    # source need not even be pinned
-    return source.split("@")[0]
-
-
-def get_module_source_from_source(source: str) -> str:
-    """Gets module source from source. E.g. `some.module.file.class@version`,
-    returns `some.module`.
-
-    Args:
-        source: source pointing to potentially pinned sha.
-    """
-    class_source = get_class_source_from_source(source)
-    return ".".join(class_source.split(".")[:-2])
 
 
 def get_module_source_from_module(module: ModuleType) -> str:
@@ -180,54 +207,47 @@ def get_module_source_from_module(module: ModuleType) -> str:
     root_path = get_source_root_path()
 
     if not module_path.startswith(root_path):
-        root_path = os.getcwd()
         logger.warning(
-            "User module %s is not in the source root. Using current "
+            "User module %s is not in the source root %s. Using current "
             "directory %s instead to resolve module source.",
             module,
             root_path,
+            os.getcwd(),
         )
+        root_path = os.getcwd()
+
+    root_path = os.path.abspath(root_path)
 
     # Remove root_path from module_path to get relative path left over
-    module_path = module_path.replace(root_path, "")[1:]
+    module_path = os.path.relpath(module_path, root_path)
 
-    # Kick out the .py and replace `/` with `.` to get the module source
-    module_path = module_path.replace(".py", "")
-    module_source = module_path.replace("/", ".")
+    if module_path.startswith(os.pardir):
+        raise RuntimeError(
+            f"Unable to resolve source for module {module}. The module file "
+            f"'{module_path}' does not seem to be inside the source root "
+            f"'{root_path}'."
+        )
+
+    # Remove the file extension and replace the os specific path separators
+    # with `.` to get the module source
+    module_path, file_extension = os.path.splitext(module_path)
+    if file_extension != ".py":
+        raise RuntimeError(
+            f"Unable to resolve source for module {module}. The module file "
+            f"'{module_path}' does not seem to be a python file."
+        )
+
+    module_source = module_path.replace(os.path.sep, ".")
 
     logger.debug(
-        f"Resolved module source for module {module} to: {module_source}"
+        f"Resolved module source for module {module} to: `{module_source}`"
     )
 
     return module_source
 
 
-def get_relative_path_from_module_source(module_source: str) -> str:
-    """Get a directory path from module, relative to root of the package tree.
-
-    E.g. zenml.core.step will return zenml/core/step.
-
-    Args:
-        module_source: A module e.g. zenml.core.step
-    """
-    return module_source.replace(".", "/")
-
-
-def get_absolute_path_from_module_source(module: str) -> str:
-    """Get a directory path from module source.
-
-    E.g. `zenml.core.step` will return `full/path/to/zenml/core/step`.
-
-    Args:
-        module: A module e.g. `zenml.core.step`.
-    """
-    mod = importlib.import_module(module)
-    return mod.__path__[0]
-
-
 def get_source_root_path() -> str:
-    """Get the repository root path or the source root path of the current
-    process.
+    """Gets repository root path or the source root path of the current process.
 
     E.g.:
 
@@ -240,10 +260,13 @@ def get_source_root_path() -> str:
 
     Returns:
         The source root path of the current process.
-    """
-    from zenml.repository import Repository
 
-    repo_root = Repository.find_repository()
+    Raises:
+        RuntimeError: if the main module was not started or determined.
+    """
+    from zenml.client import Client
+
+    repo_root = Client.find_repository()
     if repo_root:
         logger.debug("Using repository root as source root: %s", repo_root)
         return str(repo_root.resolve())
@@ -266,32 +289,17 @@ def get_source_root_path() -> str:
     return str(path)
 
 
-def get_module_source_from_class(
-    class_: Union[Type[Any], str]
-) -> Optional[str]:
-    """Takes class input and returns module_source. If class is already string
-    then returns the same.
+def get_source(value: Any) -> str:
+    """Returns the source code of an object.
+
+    If executing within a IPython kernel environment, then this monkey-patches
+    `inspect` module temporarily with a workaround to get source from the cell.
 
     Args:
-        class_: object of type class.
-    """
-    if isinstance(class_, str):
-        module_source = class_
-    else:
-        # Infer it from the class provided
-        if not inspect.isclass(class_):
-            raise AssertionError("step_type is neither string nor class.")
-        module_source = class_.__module__ + "." + class_.__name__
-    return module_source
+        value: object to get source from.
 
-
-def get_source(value: Any) -> str:
-    """Returns the source code of an object. If executing within a IPython
-    kernel environment, then this monkey-patches `inspect` module temporarily
-    with a workaround to get source from the cell.
-
-    Raises:
-        TypeError: If source not found.
+    Returns:
+        Source code of object.
     """
     if Environment.in_notebook():
         # Monkey patch inspect.getfile temporarily to make getsource work.
@@ -348,7 +356,17 @@ def get_source(value: Any) -> str:
 
 
 def get_hashed_source(value: Any) -> str:
-    """Returns a hash of the objects source code."""
+    """Returns a hash of the objects source code.
+
+    Args:
+        value: object to get source from.
+
+    Returns:
+        Hash of source code.
+
+    Raises:
+        TypeError: If unable to compute the hash.
+    """
     try:
         source_code = get_source(value)
     except TypeError:
@@ -358,7 +376,7 @@ def get_hashed_source(value: Any) -> str:
     return hashlib.sha256(source_code.encode("utf-8")).hexdigest()
 
 
-def resolve_class(class_: Type[Any]) -> str:
+def resolve_class(class_: Type[Any], replace_main_module: bool = True) -> str:
     """Resolves a class into a serializable source string.
 
     For classes that are not built-in nor imported from a Python package, the
@@ -367,8 +385,12 @@ def resolve_class(class_: Type[Any]) -> str:
 
     Args:
         class_: A Python Class reference.
+        replace_main_module: If `True`, classes in the main module will have
+            the __main__ module source replaced with the source relative to
+            the ZenML source root.
 
-    Returns: source_path e.g. this.module.Class.
+    Returns:
+        source_path e.g. this.module.Class.
     """
     initial_source = class_.__module__ + "." + class_.__name__
     if is_standard_source(initial_source):
@@ -380,9 +402,15 @@ def resolve_class(class_: Type[Any]) -> str:
         # builtin file
         return initial_source
 
-    if initial_source.startswith("__main__") or is_third_party_module(
-        file_path
-    ):
+    if initial_source.startswith("__main__"):
+        if not replace_main_module:
+            return initial_source
+
+        # Resolve the __main__ module to something relative to the ZenML source
+        # root
+        return f"{get_main_module_source()}.{class_.__name__}"
+
+    if is_third_party_module(file_path):
         return initial_source
 
     # Regular user file -> get the full module path relative to the
@@ -391,40 +419,57 @@ def resolve_class(class_: Type[Any]) -> str:
         sys.modules[class_.__module__]
     )
 
-    # ENG-123 Sanitize for Windows OS
-    # module_source = module_source.replace("\\", ".")
+    source = module_source + "." + class_.__name__
+    logger.debug(f"Resolved class {class_} to `{source}`.")
+    return source
 
-    logger.debug(f"Resolved class {class_} to {module_source}")
 
-    return module_source + "." + class_.__name__
+def get_main_module_source() -> str:
+    """Gets the source of the main module.
+
+    Returns:
+        The main module source.
+    """
+    main_module = sys.modules["__main__"]
+    return get_module_source_from_module(main_module)
 
 
 def import_class_by_path(class_path: str) -> Type[Any]:
-    """Imports a class based on a given path
+    """Imports a class based on a given path.
 
     Args:
         class_path: str, class_source e.g. this.module.Class
 
-    Returns: the given class
+    Returns:
+        the given class
     """
-    classname = class_path.split(".")[-1]
-    modulename = ".".join(class_path.split(".")[0:-1])
-    mod = importlib.import_module(modulename)
-    return getattr(mod, classname)  # type: ignore[no-any-return]
+    module_name, class_name = class_path.rsplit(".", 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, class_name)  # type: ignore[no-any-return]
 
 
 @contextmanager
-def prepend_python_path(path: str) -> Iterator[None]:
-    """Simple context manager to help import module within the repo"""
+def prepend_python_path(paths: List[str]) -> Iterator[None]:
+    """Simple context manager to help import module within the repo.
+
+    Args:
+        paths: paths to prepend to sys.path
+
+    Yields:
+        None
+    """
     try:
         # Entering the with statement
-        sys.path.insert(0, path)
+        for path in paths:
+            sys.path.insert(0, path)
         yield
     finally:
         # Exiting the with statement
-        sys.path.remove(path)
+        for path in paths:
+            sys.path.remove(path)
 
 
+# TODO: can we cache this?
 def load_source_path_class(
     source: str, import_path: Optional[str] = None
 ) -> Type[Any]:
@@ -433,10 +478,13 @@ def load_source_path_class(
     Args:
         source: class_source e.g. this.module.Class[@sha]
         import_path: optional path to add to python path
-    """
-    from zenml.repository import Repository
 
-    repo_root = Repository.find_repository()
+    Returns:
+        the given class
+    """
+    from zenml.client import Client
+
+    repo_root = Client.find_repository()
     if not import_path and repo_root:
         import_path = str(repo_root)
 
@@ -444,7 +492,7 @@ def load_source_path_class(
         source = source.split("@")[0]
 
     if import_path is not None:
-        with prepend_python_path(import_path):
+        with prepend_python_path([import_path]):
             logger.debug(
                 f"Loading class {source} with import path {import_path}"
             )
@@ -452,67 +500,185 @@ def load_source_path_class(
     return import_class_by_path(source)
 
 
-def import_python_file(file_path: str) -> types.ModuleType:
-    """Imports a python file.
+# Ideally both the expected_class and return type should be annotated with a
+# type var to indicate that both they represent the same type. However, mypy
+# currently doesn't support this for abstract classes:
+# https://github.com/python/mypy/issues/4717
+def load_and_validate_class(
+    source: str, expected_class: Type[Any]
+) -> Type[Any]:
+    """Loads a source class and validates its type.
+
+    Args:
+        source: The source string.
+        expected_class: The class that the source should resolve to.
+
+    Raises:
+        TypeError: If the source does not resolve to the expected type.
+
+    Returns:
+        The resolved source class.
+    """
+    class_ = load_source_path_class(source)
+
+    if isinstance(class_, type) and issubclass(class_, expected_class):
+        return class_
+    else:
+        raise TypeError(
+            f"Error while loading `{source}`. Expected class "
+            f"{expected_class.__name__}, got {class_} instead."
+        )
+
+
+def validate_source_class(source: str, expected_class: Type[Any]) -> bool:
+    """Validates that a source resolves to a certain type.
+
+    Args:
+        source: The source to validate.
+        expected_class: The class that the source should resolve to.
+
+    Returns:
+        If the source resolves to the expected class.
+    """
+    try:
+        value = load_source_path_class(source)
+    except Exception:
+        return False
+
+    is_class = isinstance(value, type)
+    if is_class and issubclass(value, expected_class):
+        return True
+    else:
+        return False
+
+
+def import_python_file(file_path: str, zen_root: str) -> types.ModuleType:
+    """Imports a python file in relationship to the zen root.
 
     Args:
         file_path: Path to python file that should be imported.
+        zen_root: Path to current zenml root
 
     Returns:
         imported module: Module
     """
-    # Add directory of python file to PYTHONPATH so we can import it
     file_path = os.path.abspath(file_path)
-    module_name = os.path.splitext(os.path.basename(file_path))[0]
+    module_path = os.path.relpath(file_path, zen_root)
+    module_name = os.path.splitext(module_path)[0].replace(os.path.sep, ".")
 
-    # In case the module is already fully or partially imported and the module
-    #  path is something like materializer.materializer the full path needs to
-    #  be checked for in the sys.modules to avoid getting an empty namespace
-    #  module
-    full_module_path = os.path.splitext(
-        os.path.relpath(file_path, os.getcwd())
-    )[0].replace("/", ".")
-
-    if full_module_path not in sys.modules:
-        with prepend_python_path(os.path.dirname(file_path)):
+    if module_name in sys.modules:
+        del sys.modules[module_name]
+        # Add directory of python file to PYTHONPATH so we can import it
+        with prepend_python_path([zen_root]):
             module = importlib.import_module(module_name)
         return module
     else:
-        return sys.modules[full_module_path]
+        # Add directory of python file to PYTHONPATH so we can import it
+        with prepend_python_path([zen_root]):
+            module = importlib.import_module(module_name)
+        return module
 
 
 def validate_flavor_source(
     source: str, component_type: StackComponentType
-) -> Type[StackComponent]:
-    """Utility function to import a StackComponent class from a given source
-    and validate its type.
+) -> Type["Flavor"]:
+    """Import a StackComponent class from a given source and validate its type.
 
     Args:
         source: source path of the implementation
         component_type: the type of the stack component
+
+    Returns:
+        the imported class
 
     Raises:
         ValueError: If ZenML cannot find the given module path
         TypeError: If the given module path does not point to a subclass of a
             StackComponent which has the right component type.
     """
+    from zenml.stack.flavor import Flavor
+    from zenml.stack.stack_component import StackComponent, StackComponentConfig
+
     try:
-        stack_component_class = load_source_path_class(source)
-    except (ValueError, AttributeError, ImportError):
+        flavor_class = load_source_path_class(source)
+    except (ValueError, AttributeError, ImportError) as e:
         raise ValueError(
-            f"ZenML can not import the source '{source}' of the given module."
+            f"ZenML can not import the flavor class '{source}': {e}"
         )
 
-    if not issubclass(stack_component_class, StackComponent):
+    if not issubclass(flavor_class, Flavor):
         raise TypeError(
             f"The source '{source}' does not point to a subclass of the ZenML"
-            f"StackComponent."
+            f"Flavor."
         )
 
-    if stack_component_class.TYPE != component_type:  # noqa
+    flavor = flavor_class()
+    try:
+        impl_class = flavor.implementation_class
+    except (ModuleNotFoundError, ImportError, NotImplementedError):
+        raise ValueError(
+            f"The implementation class defined within the "
+            f"'{flavor_class.__name__}' can not be imported."
+        )
+
+    if not issubclass(impl_class, StackComponent):
         raise TypeError(
-            f"The source points to a {stack_component_class.TYPE}, not a "  # noqa
+            f"The implementation class '{impl_class.__name__}' of a flavor "
+            f"needs to be a subclass of the ZenML StackComponent."
+        )
+
+    if flavor.type != component_type:  # noqa
+        raise TypeError(
+            f"The source points to a {impl_class.type}, not a "  # noqa
             f"{component_type}."
         )
 
-    return stack_component_class  # noqa
+    try:
+        conf_class = flavor.config_class
+    except (ModuleNotFoundError, ImportError, NotImplementedError):
+        raise ValueError(
+            f"The config class defined within the "
+            f"'{flavor_class.__name__}' can not be imported."
+        )
+
+    if not issubclass(conf_class, StackComponentConfig):
+        raise TypeError(
+            f"The config class '{conf_class.__name__}' of a flavor "
+            f"needs to be a subclass of the ZenML StackComponentConfig."
+        )
+
+    return flavor_class  # noqa
+
+
+def validate_config_source(
+    source: str, component_type: StackComponentType
+) -> Type["StackComponentConfig"]:
+    """Validates a StackComponentConfig class from a given source.
+
+    Args:
+        source: source path of the implementation
+        component_type: the type of the stack component
+
+    Returns:
+        The validated config.
+
+    Raises:
+        ValueError: If ZenML cannot import the config class.
+        TypeError: If the config class is not a subclass of the `config_class`.
+    """
+    from zenml.stack.stack_component import StackComponentConfig
+
+    try:
+        config_class = load_source_path_class(source)
+    except (ValueError, AttributeError, ImportError) as e:
+        raise ValueError(
+            f"ZenML can not import the config class '{source}': {e}"
+        )
+
+    if not issubclass(config_class, StackComponentConfig):
+        raise TypeError(
+            f"The source path '{source}' does not point to a subclass of "
+            f"the ZenML config_class."
+        )
+
+    return config_class  # noqa

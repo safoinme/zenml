@@ -11,12 +11,12 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""ZenML specific exception definitions"""
-import textwrap
+"""ZenML specific exception definitions."""
+
 from typing import TYPE_CHECKING, List, Optional, Type
 
 if TYPE_CHECKING:
-    from zenml.steps import BaseStepConfig
+    from zenml.steps import BaseParameters
 
 
 class ZenMLBaseException(Exception):
@@ -27,7 +27,7 @@ class ZenMLBaseException(Exception):
         message: Optional[str] = None,
         url: Optional[str] = None,
     ):
-        """BaseException used to format messages displayed to the user.
+        """The BaseException used to format messages displayed to the user.
 
         Args:
             message: Message with details of exception. This message
@@ -44,26 +44,31 @@ class ZenMLBaseException(Exception):
 
 
 class InitializationException(ZenMLBaseException):
-    """Raised when an error occurred during initialization of a ZenML
-    repository."""
+    """Raised when an error occurred during initialization of a ZenML repository."""
 
 
-class ForbiddenRepositoryAccessError(ZenMLBaseException, RuntimeError):
-    """Raised when trying to access a ZenML repository instance while a step
-    is executed."""
+class AuthorizationException(ZenMLBaseException):
+    """Raised when an authorization error occurred while trying to access a ZenML resource ."""
 
 
 class DoesNotExistException(ZenMLBaseException):
-    """Raises exception when the entity does not exist in the system but an
-    action is being done that requires it to be present."""
+    """Raises exception when the entity does not exist in the system but an action is being done that requires it to be present."""
 
     def __init__(self, message: str):
+        """Initializes the exception.
+
+        Args:
+            message: Message with details of exception.
+        """
         super().__init__(message)
 
 
 class AlreadyExistsException(ZenMLBaseException):
-    """Raises exception when the `name` already exist in the system but an
-    action is trying to create a resource with the same name."""
+    """Raises exception when the `name` already exists in the system.
+
+    This happens when an action is trying to create a resource with the same
+    name.
+    """
 
     def __init__(
         self,
@@ -71,20 +76,32 @@ class AlreadyExistsException(ZenMLBaseException):
         name: str = "",
         resource_type: str = "",
     ):
+        """Initializes the exception.
+
+        Args:
+            message: Message with details of exception.
+            name: Name of the resource that already exists.
+            resource_type: Type of the resource that already exists.
+        """
         if message is None:
             message = f"{resource_type} `{name}` already exists!"
         super().__init__(message)
 
 
 class PipelineNotSucceededException(ZenMLBaseException):
-    """Raises exception when trying to fetch artifacts from a not succeeded
-    pipeline."""
+    """Raises exception when trying to fetch artifacts from a not succeeded pipeline."""
 
     def __init__(
         self,
         name: str = "",
         message: str = "{} is not yet completed successfully.",
     ):
+        """Initializes the exception.
+
+        Args:
+            name: Name of the pipeline.
+            message: Message with details of exception.
+        """
         super().__init__(message.format(name))
 
 
@@ -97,80 +114,77 @@ class GitException(ZenMLBaseException):
         "Please make sure that all relevant files "
         "are committed.",
     ):
+        """Initializes the exception.
+
+        Args:
+            message: Message with details of exception.
+        """
         super().__init__(message)
 
 
 class StepInterfaceError(ZenMLBaseException):
-    """Raises exception when interacting with the Step interface
-    in an unsupported way."""
+    """Raises exception when interacting with the Step interface in an unsupported way."""
 
 
 class MaterializerInterfaceError(ZenMLBaseException):
-    """Raises exception when interacting with the Materializer interface
-    in an unsupported way."""
+    """Raises exception when interacting with the Materializer interface in an unsupported way."""
 
 
 class StepContextError(ZenMLBaseException):
-    """Raises exception when interacting with a StepContext
-    in an unsupported way."""
+    """Raises exception when interacting with a StepContext in an unsupported way."""
 
 
 class PipelineInterfaceError(ZenMLBaseException):
-    """Raises exception when interacting with the Pipeline interface
-    in an unsupported way."""
+    """Raises exception when interacting with the Pipeline interface in an unsupported way."""
 
 
 class ArtifactInterfaceError(ZenMLBaseException):
-    """Raises exception when interacting with the Artifact interface
-    in an unsupported way."""
+    """Raises exception when interacting with the Artifact interface in an unsupported way."""
 
 
 class StackComponentInterfaceError(ZenMLBaseException):
-    """Raises exception when interacting with the stack components
-    in an unsupported way."""
+    """Raises exception when interacting with the stack components in an unsupported way."""
 
 
 class ArtifactStoreInterfaceError(ZenMLBaseException):
-    """Raises exception when interacting with the Artifact Store interface
-    in an unsupported way."""
+    """Raises exception when interacting with the Artifact Store interface in an unsupported way."""
 
 
 class PipelineConfigurationError(ZenMLBaseException):
-    """Raises exceptions when a pipeline configuration contains
-    invalid values."""
+    """Raises exceptions when a pipeline configuration contains invalid values."""
 
 
 class MissingStepParameterError(ZenMLBaseException):
-    """Raises exceptions when a step parameter is missing when running a
-    pipeline."""
+    """Raises exceptions when a step parameter is missing when running a pipeline."""
 
     def __init__(
         self,
         step_name: str,
         missing_parameters: List[str],
-        config_class: Type["BaseStepConfig"],
+        parameters_class: Type["BaseParameters"],
     ):
-        """
-        Initializes a MissingStepParameterError object.
+        """Initializes a MissingStepParameterError object.
 
         Args:
             step_name: Name of the step for which one or more parameters
-                       are missing.
+                are missing.
             missing_parameters: Names of all parameters which are missing.
-            config_class: Class of the configuration object for which
-                          the parameters are missing.
+            parameters_class: Class of the parameters object for which
+                the parameters are missing.
         """
+        import textwrap
+
         message = textwrap.fill(
             textwrap.dedent(
                 f"""
             Missing parameters {missing_parameters} for '{step_name}' step.
             There are three ways to solve this issue:
-            (1) Specify a default value in the configuration class
-            `{config_class.__name__}`
+            (1) Specify a default value in the parameters class
+            `{parameters_class.__name__}`
             (2) Specify the parameters in code when creating the pipeline:
-            `my_pipeline({step_name}(config={config_class.__name__}(...))`
+            `my_pipeline({step_name}(params={parameters_class.__name__}(...))`
             (3) Specify the parameters in a yaml configuration file and pass
-            it to the pipeline: `my_pipeline(...).with_config('path_to_yaml')`
+            it to the pipeline: `my_pipeline(...).run(config_path='path_to_yaml')`
             """
             )
         )
@@ -189,27 +203,36 @@ class DuplicateRunNameError(RuntimeError):
         message: str = "Unable to run a pipeline with a run name that "
         "already exists.",
     ):
+        """Initializes the exception.
+
+        Args:
+            message: Message with details of exception.
+        """
         super().__init__(message)
 
 
-class StackExistsError(ZenMLBaseException):
-    """Raised when trying to register a stack with a name that already
-    exists."""
+class NotAuthorizedError(ZenMLBaseException):
+    """Raised when the user does not have permission to perform an action."""
 
 
-class StackComponentExistsError(ZenMLBaseException):
-    """Raised when trying to register a stack component with a name that
-    already exists."""
+class ValidationError(ZenMLBaseException):
+    """Raised when the Model passed to the ZenStore."""
 
 
 class EntityExistsError(ZenMLBaseException):
-    """Raised when trying to register a user-management entity with a name that
-    already exists."""
+    """Raised when trying to register an entity that already exists."""
 
 
-class SecretExistsError(ZenMLBaseException):
-    """Raised when trying to register a secret with a name that
-    already exists."""
+class StackExistsError(EntityExistsError):
+    """Raised when trying to register a stack with name that already exists."""
+
+
+class StackComponentExistsError(EntityExistsError):
+    """Raised when trying to register a stack component with existing name."""
+
+
+class SecretExistsError(EntityExistsError):
+    """Raised when trying to register a secret with existing name."""
 
 
 class StackValidationError(ZenMLBaseException):
@@ -217,14 +240,20 @@ class StackValidationError(ZenMLBaseException):
 
 
 class ProvisioningError(ZenMLBaseException):
-    """Raised when an error occurs when provisioning resources for a
-    StackComponent."""
+    """Raised when an error occurs when provisioning resources for a StackComponent."""
 
 
 class GitNotFoundError(ImportError):
-    """Raised when ZenML CLI is used to interact with examples on a machine
-    with no git installation"""
+    """Raised when ZenML CLI is used to interact with examples on a machine with no git installation."""
 
 
 class DuplicatedConfigurationError(ZenMLBaseException):
-    """Raised when a configuration parameter is set twice"""
+    """Raised when a configuration parameter is set twice."""
+
+
+class IllegalOperationError(ZenMLBaseException):
+    """Raised when an illegal operation is attempted."""
+
+
+class SettingsResolvingError(ZenMLBaseException):
+    """Raised when resolving settings failed."""

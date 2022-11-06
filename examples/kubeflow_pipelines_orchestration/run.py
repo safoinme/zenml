@@ -1,4 +1,4 @@
-#  Copyright (c) ZenML GmbH 2021. All Rights Reserved.
+#  Copyright (c) ZenML GmbH 2022. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -13,16 +13,13 @@
 #  permissions and limitations under the License.
 
 import click
-from pipeline import (
-    TrainerConfig,
-    evaluator,
-    importer,
-    mnist_pipeline,
-    normalizer,
-    trainer,
-)
+from pipelines.mnist_pipeline import mnist_pipeline
+from steps.evaluators import evaluator
+from steps.importers import importer
+from steps.normalizers import normalizer
+from steps.trainers import TrainerParameters, trainer
 
-from zenml.integrations.tensorflow.visualizers import (
+from zenml.integrations.tensorboard.visualizers import (
     stop_tensorboard_server,
     visualize_tensorboard,
 )
@@ -35,7 +32,7 @@ from zenml.integrations.tensorflow.visualizers import (
     "--stop-tensorboard",
     is_flag=True,
     default=False,
-    help="Stop the Tensorboard server",
+    help="Stop the TensorBoard server",
 )
 def main(epochs: int, lr: float, stop_tensorboard: bool):
     """Run the mnist example pipeline"""
@@ -48,13 +45,13 @@ def main(epochs: int, lr: float, stop_tensorboard: bool):
         return
 
     # Run the pipeline
-    p = mnist_pipeline(
+    pipeline_instance = mnist_pipeline(
         importer=importer(),
         normalizer=normalizer(),
-        trainer=trainer(config=TrainerConfig(epochs=epochs, lr=lr)),
+        trainer=trainer(params=TrainerParameters(epochs=epochs, lr=lr)),
         evaluator=evaluator(),
     )
-    p.run()
+    pipeline_instance.run()
 
     visualize_tensorboard(
         pipeline_name="mnist_pipeline",
@@ -66,7 +63,7 @@ def main(epochs: int, lr: float, stop_tensorboard: bool):
     #
     # from zenml.pipelines import Schedule
     #
-    # p.run(
+    # pipeline_instance.run(
     #     schedule=Schedule(
     #         start_time=datetime.now(),
     #         end_time=datetime.now() + timedelta(minutes=10),

@@ -17,7 +17,7 @@ continuous model deployment with minimal effort.
 ## 🗺 Overview
 
 The example uses the
-[Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist) dataset to
+[MNIST-digits](https://keras.io/api/datasets/mnist/) dataset to
 train a classifier using [Tensorflow (Keras)](https://www.tensorflow.org/) using different
 hyperparameter values (epochs and learning rate) that can also be supplied as command line
 arguments.
@@ -67,14 +67,14 @@ This example contains two very important aspects that should be highlighted.
 ### 🛠️ Service deployment from code
 
 ```python
-from zenml.steps import BaseStepConfig
+from zenml.steps import BaseParameters
 from zenml.integrations.mlflow.steps import mlflow_deployer_step
-from zenml.integrations.mlflow.steps import MLFlowDeployerConfig
+from zenml.integrations.mlflow.steps import MLFlowDeployerParameters
 
 ...
 
-class MLFlowDeploymentLoaderStepConfig(BaseStepConfig):
-    """MLflow deployment getter configuration
+class MLFlowDeploymentLoaderStepParameters(BaseParameters):
+    """MLflow deployment getter parameters
 
     Attributes:
         pipeline_name: name of the pipeline that deployed the MLflow prediction
@@ -96,7 +96,7 @@ model_deployer = mlflow_deployer_step(name="model_deployer")
 deployment = continuous_deployment_pipeline(
     ...,
     # as a last step to our pipeline the model deployer step is run with it config in place
-    model_deployer=model_deployer(config=MLFlowDeployerConfig(workers=3)),
+    model_deployer=model_deployer(params=MLFlowDeployerParameters(workers=3)),
 )
 ```
 
@@ -104,32 +104,32 @@ deployment = continuous_deployment_pipeline(
 
 ```python
 from zenml.integrations.mlflow.services import MLFlowDeploymentService
-from zenml.steps import BaseStepConfig, Output, StepContext, step
+from zenml.steps import BaseParameters, Output, StepContext, step
 from zenml.services import load_last_service_from_step
 
 ...
 
-class MLFlowDeploymentLoaderStepConfig(BaseStepConfig):
+class MLFlowDeploymentLoaderStepParameters(BaseParameters):
     # see implementation above
     ...
 
 # Step to retrieve the service associated with the last pipeline run
 @step(enable_cache=False)
 def prediction_service_loader(
-    config: MLFlowDeploymentLoaderStepConfig, context: StepContext
+    params: MLFlowDeploymentLoaderStepParameters, context: StepContext
 ) -> MLFlowDeploymentService:
     """Get the prediction service started by the deployment pipeline"""
 
     service = load_last_service_from_step(
-        pipeline_name=config.pipeline_name,
-        step_name=config.step_name,
+        pipeline_name=params.pipeline_name,
+        step_name=params.step_name,
         step_context=context,
-        running=config.running,
+        running=params.running,
     )
     if not service:
         raise RuntimeError(
             f"No MLflow prediction service deployed by the "
-            f"{config.step_name} step in the {config.pipeline_name} pipeline "
+            f"{params.step_name} step in the {params.pipeline_name} pipeline "
             f"is currently running."
         )
 
@@ -153,7 +153,7 @@ def predictor(
 inference = inference_pipeline(
     ...,
     prediction_service_loader=prediction_service_loader(
-        MLFlowDeploymentLoaderStepConfig(
+        MLFlowDeploymentLoaderStepParameters(
             pipeline_name="continuous_deployment_pipeline",
             step_name="model_deployer",
         )
@@ -180,7 +180,7 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
 zenml integration install mlflow tensorflow
@@ -191,6 +191,9 @@ cd zenml_examples/mlflow_deployment
 
 # initialize
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 ### 🥞 Setting up the ZenML Stack
 
@@ -203,12 +206,11 @@ zenml integration install mlflow
 zenml model-deployer register mlflow_deployer --flavor=mlflow
 zenml experiment-tracker register mlflow_tracker --flavor=mlflow
 zenml stack register local_mlflow_stack \
-  -m default \
   -a default \
   -o default \
   -d mlflow_deployer \
-  -e mlflow_tracker
-zenml stack set local_mlflow_stack
+  -e mlflow_tracker \
+  --set
 ```
 
 ### ▶️ Run the Code
@@ -222,7 +224,7 @@ Re-running the example with different hyperparameter values will re-train
 the model and update the MLflow deployment server to serve the new model:
 
 ```shell
-python run.py --config deploy --epochs=10 --learning_rate=0.1
+python run.py --config deploy --epochs=10 --lr=0.1
 ```
 
 If the input argument values are not changed, the pipeline caching feature
@@ -238,10 +240,10 @@ to perform an online prediction. To run the inference pipeline:
 python run.py --config predict
 ```
 
-The `zenml served-models list` CLI command can be run to list the active model servers:
+The `zenml model-deployer models list` CLI command can be run to list the active model servers:
 
 ```
-$ zenml served-models list
+$ zenml model-deployer models list
 ┏━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━┓
 ┃ STATUS │ UUID                                 │ PIPELINE_NAME                  │ PIPELINE_STEP_NAME         │ MODEL_NAME ┃
 ┠────────┼──────────────────────────────────────┼────────────────────────────────┼────────────────────────────┼────────────┨
@@ -250,10 +252,10 @@ $ zenml served-models list
 ```
 
 To get more information about a specific model server, such as the prediction URL,
-the `zenml served-models describe <uuid>` CLI command can be run:
+the `zenml model-deployer models describe <uuid>` CLI command can be run:
 
 ```
-$ zenml served-models describe 87980237-843f-414f-bf06-931f4da69e56
+$ zenml model-deployer models describe 87980237-843f-414f-bf06-931f4da69e56
         Properties of Served Model 87980237-843f-414f-bf06-931f4da69e56        
 ┏━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ MODEL SERVICE PROPERTY │ VALUE                                              ┃
@@ -286,16 +288,16 @@ The prediction URL can sometimes be more difficult to make out in the detailed
 output, so there is a separate CLI command available to retrieve it:
 
 ```shell
-$ zenml served-models get-url 87980237-843f-414f-bf06-931f4da69e56
+$ zenml model-deployer models get-url 87980237-843f-414f-bf06-931f4da69e56
   Prediction URL of Served Model 87980237-843f-414f-bf06-931f4da69e56 is:
   http://localhost:8001/invocations
 ```
 
-Finally, a model server can be deleted with the `zenml served-models delete <uuid>`
+Finally, a model server can be deleted with the `zenml model-deployer models delete <uuid>`
 CLI command:
 
 ```shell
-$ zenml served-models delete 87980237-843f-414f-bf06-931f4da69e56
+$ zenml model-deployer models delete 87980237-843f-414f-bf06-931f4da69e56
 Model server MLFlowDeploymentService[87980237-843f-414f-bf06-931f4da69e56] 
 (type: model-serving, flavor: mlflow) was deleted.
 ```
@@ -306,7 +308,7 @@ To stop any prediction servers running in the background, use the
 `zenml model-server list` and `zenml model-server delete <uuid>` CLI commands.:
 
 ```shell
-zenml served-models delete 8cbe671b-9fce-4394-a051-68e001f92765
+zenml model-deployer models delete 8cbe671b-9fce-4394-a051-68e001f92765
 ```
 
 Then delete the remaining ZenML references.
@@ -317,6 +319,8 @@ rm -rf zenml_examples
 
 # 📜 Learn more
 
-If you want to learn more about deployment in zenml in general or about how to 
-build your own deployer steps in zenml check out our 
-[docs](docs.zenml.io/stack-components/model_deployer).
+Our docs regarding the MLflow deployment integration can be found [here](https://docs.zenml.io/component-gallery/model-deployers/mlflow).
+
+If you want to learn more about deployment in ZenML in general or about how to 
+build your own deployer steps in ZenML check out our 
+[docs](https://docs.zenml.io/component-gallery/model-deployers/custom).

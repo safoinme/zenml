@@ -25,17 +25,21 @@ zenml example run pytorch
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
-zenml integration install pytorch -f
+zenml integration install pytorch
 pip install -r requirements.txt  # for torchvision
 
 # pull example
-cd zenml/examples/pytorch
+zenml example pull pytorch
+cd zenml_examples/pytorch
 
 # initialize
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 ### ▶️ Run the Code
@@ -45,6 +49,12 @@ Now we're ready. Execute the pipeline:
 ```shell
 # sequence-classification
 python run.py
+```
+
+Alternatively, if you want to run based on the config.yaml you can run with:
+
+```bash
+zenml pipeline run pipelines/fashion_mnist_pipeline.py -c config.yaml
 ```
 
 This will train a PyTorch model on the Fashion MNIST dataset.

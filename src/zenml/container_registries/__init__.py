@@ -11,7 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""
+"""Initialization for ZenML's container registries module.
+
 A container registry is a store for (Docker) containers. A ZenML workflow
 involving a container registry would automatically containerize your code to
 be transported across stacks running remotely. As part of the deployment to
@@ -25,33 +26,29 @@ container registry like the Elastic Container Registry at AWS in a more
 production setting.
 """
 from zenml.container_registries.azure_container_registry import (
-    AzureContainerRegistry,
+    AzureContainerRegistryFlavor,
 )
 from zenml.container_registries.base_container_registry import (
     BaseContainerRegistry,
 )
 from zenml.container_registries.default_container_registry import (
-    DefaultContainerRegistry,
+    DefaultContainerRegistryFlavor,
 )
 from zenml.container_registries.dockerhub_container_registry import (
-    DockerHubContainerRegistry,
+    DockerHubContainerRegistryFlavor,
 )
 from zenml.container_registries.gcp_container_registry import (
-    GCPContainerRegistry,
+    GCPContainerRegistryFlavor,
 )
 from zenml.container_registries.github_container_registry import (
-    GitHubContainerRegistry,
-)
-from zenml.container_registries.gitlab_container_registry import (
-    GitLabContainerRegistry,
+    GitHubContainerRegistryFlavor,
 )
 
 __all__ = [
     "BaseContainerRegistry",
-    "DefaultContainerRegistry",
-    "AzureContainerRegistry",
-    "DockerHubContainerRegistry",
-    "GCPContainerRegistry",
-    "GitLabContainerRegistry",
-    "GitHubContainerRegistry",
+    "DefaultContainerRegistryFlavor",
+    "AzureContainerRegistryFlavor",
+    "DockerHubContainerRegistryFlavor",
+    "GCPContainerRegistryFlavor",
+    "GitHubContainerRegistryFlavor",
 ]

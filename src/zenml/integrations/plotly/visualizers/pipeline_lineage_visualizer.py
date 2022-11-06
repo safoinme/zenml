@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Implementation of the Plotly Pipeline Lineage Visualizer."""
 
 from abc import abstractmethod
 from typing import Any
@@ -21,7 +22,7 @@ from plotly.graph_objs import Figure
 
 from zenml.logger import get_logger
 from zenml.post_execution import PipelineView
-from zenml.visualizers import BasePipelineVisualizer
+from zenml.visualizers import BaseVisualizer
 
 logger = get_logger(__name__)
 
@@ -29,14 +30,23 @@ logger = get_logger(__name__)
 #  should use plotly in more useful ways.
 
 
-class PipelineLineageVisualizer(BasePipelineVisualizer):
+class PipelineLineageVisualizer(BaseVisualizer):
     """Visualize the lineage of runs in a pipeline using plotly."""
 
     @abstractmethod
     def visualize(
         self, object: PipelineView, *args: Any, **kwargs: Any
     ) -> Figure:
-        """Creates a pipeline lineage diagram using plotly."""
+        """Creates a pipeline lineage diagram using plotly.
+
+        Args:
+            object: The pipeline view to visualize.
+            *args: Additional arguments to pass to the visualization.
+            **kwargs: Additional keyword arguments to pass to the visualization.
+
+        Returns:
+            A plotly figure.
+        """
         logger.warning(
             "This integration is not completed yet. Results might be unexpected."
         )

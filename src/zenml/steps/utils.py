@@ -12,7 +12,8 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 
-"""
+"""Utility functions for Steps.
+
 The collection of utility functions/classes are inspired by their original
 implementation of the Tensorflow Extended team, which can be found here:
 
@@ -30,69 +31,58 @@ import json
 import sys
 import typing
 from typing import (
+    TYPE_CHECKING,
     Any,
-    Callable,
     ClassVar,
     Dict,
-    ItemsView,
-    Iterator,
-    KeysView,
     List,
+    Mapping,
     Optional,
     Sequence,
-    Set,
     Type,
-    ValuesView,
 )
 
 import pydantic
-from tfx.dsl.component.experimental.decorators import _SimpleComponent
 from tfx.dsl.components.base.base_executor import BaseExecutor
 from tfx.dsl.components.base.executor_spec import ExecutorClassSpec
 from tfx.orchestration.portable import outputs_utils
 from tfx.proto.orchestration import execution_result_pb2
 from tfx.types import component_spec
-from tfx.types.channel import Channel
-from tfx.utils import json_utils
 
 from zenml.artifacts.base_artifact import BaseArtifact
+from zenml.config.step_configurations import StepConfiguration
+from zenml.config.step_run_info import StepRunInfo
 from zenml.exceptions import MissingStepParameterError, StepInterfaceError
 from zenml.io import fileio
 from zenml.logger import get_logger
 from zenml.materializers.base_materializer import BaseMaterializer
-from zenml.steps.base_step_config import BaseStepConfig
 from zenml.steps.step_context import StepContext
 from zenml.steps.step_environment import StepEnvironment
 from zenml.steps.step_output import Output
-from zenml.utils import source_utils
+from zenml.utils import proto_utils, source_utils
+
+if TYPE_CHECKING:
+    from tfx.dsl.component.experimental.decorators import _SimpleComponent
+
+    from zenml.config.step_configurations import ArtifactConfiguration
+    from zenml.steps.base_step import BaseStep
 
 logger = get_logger(__name__)
 
-STEP_INNER_FUNC_NAME: str = "entrypoint"
-SINGLE_RETURN_OUT_NAME: str = "output"
-PARAM_STEP_NAME: str = "step_name"
-PARAM_ENABLE_CACHE: str = "enable_cache"
-PARAM_PIPELINE_PARAMETER_NAME: str = "pipeline_parameter_name"
-PARAM_CREATED_BY_FUNCTIONAL_API: str = "created_by_functional_api"
-PARAM_CUSTOM_STEP_OPERATOR: str = "custom_step_operator"
-INTERNAL_EXECUTION_PARAMETER_PREFIX: str = "zenml-"
-INSTANCE_CONFIGURATION: str = "INSTANCE_CONFIGURATION"
-OUTPUT_SPEC: str = "OUTPUT_SPEC"
-
-
-def do_types_match(type_a: Type[Any], type_b: Type[Any]) -> bool:
-    """Check whether type_a and type_b match.
-
-    Args:
-        type_a: First Type to check.
-        type_b: Second Type to check.
-
-    Returns:
-        True if types match, otherwise False.
-    """
-    # TODO [ENG-158]: Check more complicated cases where type_a can be a sub-type
-    #  of type_b
-    return type_a == type_b
+STEP_INNER_FUNC_NAME = "entrypoint"
+SINGLE_RETURN_OUT_NAME = "output"
+PARAM_STEP_NAME = "name"
+PARAM_ENABLE_CACHE = "enable_cache"
+PARAM_PIPELINE_PARAMETER_NAME = "pipeline_parameter_name"
+PARAM_CREATED_BY_FUNCTIONAL_API = "created_by_functional_api"
+PARAM_STEP_OPERATOR = "step_operator"
+PARAM_EXPERIMENT_TRACKER = "experiment_tracker"
+INTERNAL_EXECUTION_PARAMETER_PREFIX = "zenml-"
+INSTANCE_CONFIGURATION = "INSTANCE_CONFIGURATION"
+PARAM_OUTPUT_ARTIFACTS = "output_artifacts"
+PARAM_OUTPUT_MATERIALIZERS = "output_materializers"
+PARAM_SETTINGS = "settings"
+PARAM_EXTRA_OPTIONS = "extra"
 
 
 def resolve_type_annotation(obj: Any) -> Any:
@@ -102,221 +92,235 @@ def resolve_type_annotation(obj: Any) -> Any:
 
     Example: if the input object is `typing.Dict`, this method will return the
     concrete class `dict`.
-    """
-    if isinstance(obj, typing._GenericAlias):  # type: ignore[attr-defined]
-        return obj.__origin__
-    else:
-        return obj
-
-
-def generate_component_spec_class(
-    step_name: str,
-    input_spec: Dict[str, Type[BaseArtifact]],
-    output_spec: Dict[str, Type[BaseArtifact]],
-    execution_parameter_names: Set[str],
-) -> Type[component_spec.ComponentSpec]:
-    """Generates a TFX component spec class for a ZenML step.
 
     Args:
-        step_name: Name of the step for which the component will be created.
-        input_spec: Input artifacts of the step.
-        output_spec: Output artifacts of the step
-        execution_parameter_names: Execution parameter names of the step.
+        obj: The object to resolve.
 
     Returns:
-        A TFX component spec class.
+        The non-generic class for generic aliases of the typing module.
     """
-    inputs = {
-        key: component_spec.ChannelParameter(type=artifact_type)
-        for key, artifact_type in input_spec.items()
+    from typing import _GenericAlias  # type: ignore[attr-defined]
+
+    if sys.version_info >= (3, 8):
+        return typing.get_origin(obj) or obj
+    else:
+        # python 3.7
+        if isinstance(obj, _GenericAlias):
+            return obj.__origin__
+        else:
+            return obj
+
+
+def parse_return_type_annotations(
+    step_annotations: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Parse the returns of a step function into a dict of resolved types.
+
+    Called within `BaseStepMeta.__new__()` to define `cls.OUTPUT_SIGNATURE`.
+    Called within `Do()` to resolve type annotations.
+
+    Args:
+        step_annotations: Type annotations of the step function.
+
+    Returns:
+        Output signature of the new step class.
+    """
+    return_type = step_annotations.get("return", None)
+    if return_type is None:
+        return {}
+
+    # Cast simple output types to `Output`.
+    if not isinstance(return_type, Output):
+        return_type = Output(**{SINGLE_RETURN_OUT_NAME: return_type})
+
+    # Resolve type annotations of all outputs and save in new dict.
+    output_signature = {
+        output_name: resolve_type_annotation(output_type)
+        for output_name, output_type in return_type.items()
     }
-    outputs = {
-        key: component_spec.ChannelParameter(type=artifact_type)
-        for key, artifact_type in output_spec.items()
-    }
+    return output_signature
+
+
+def create_component_class(step: "BaseStep") -> Type["_SimpleComponent"]:
+    """Creates a TFX component class.
+
+    Args:
+        step: The step for which to create the component class.
+
+    Returns:
+        The component class.
+    """
+    from tfx.dsl.component.experimental.decorators import _SimpleComponent
+
+    executor_class = create_executor_class(step=step)
+    component_spec_class = _create_component_spec_class(step=step)
+
+    module, _ = source_utils.resolve_class(step.__class__).rsplit(".", 1)
+
+    return type(
+        step.configuration.name,
+        (_SimpleComponent,),
+        {
+            "SPEC_CLASS": component_spec_class,
+            "EXECUTOR_SPEC": ExecutorClassSpec(executor_class=executor_class),
+            "__module__": module,
+        },
+    )
+
+
+def _create_component_spec_class(
+    step: "BaseStep",
+) -> Type[component_spec.ComponentSpec]:
+    """Creates a TFX component spec class.
+
+    Args:
+        step: The step for which to create the component spec class.
+
+    Returns:
+        The component spec class.
+    """
+    # Ensure that the step configuration is complete
+    configuration = StepConfiguration.parse_obj(step.configuration)
+
+    inputs = _create_channel_parameters(configuration.inputs)
+    outputs = _create_channel_parameters(configuration.outputs)
+
+    execution_parameter_names = set(configuration.parameters).union(
+        step._internal_execution_parameters
+    )
     parameters = {
         key: component_spec.ExecutionParameter(type=str)  # type: ignore[no-untyped-call] # noqa
         for key in execution_parameter_names
     }
     return type(
-        f"{step_name}_Spec",
+        f"{step.name}_Spec",
         (component_spec.ComponentSpec,),
         {
             "INPUTS": inputs,
             "OUTPUTS": outputs,
             "PARAMETERS": parameters,
+            "__module__": __name__,
         },
     )
 
 
-def generate_component_class(
-    step_name: str,
-    step_module: str,
-    input_spec: Dict[str, Type[BaseArtifact]],
-    output_spec: Dict[str, Type[BaseArtifact]],
-    execution_parameter_names: Set[str],
-    step_function: Callable[..., Any],
-    materializers: Dict[str, Type[BaseMaterializer]],
-) -> Type["_ZenMLSimpleComponent"]:
-    """Generates a TFX component class for a ZenML step.
+def _create_channel_parameters(
+    artifacts: Mapping[str, "ArtifactConfiguration"]
+) -> Dict[str, component_spec.ChannelParameter]:
+    """Creates TFX channel parameters for ZenML artifacts.
 
     Args:
-        step_name: Name of the step for which the component will be created.
-        step_module: Module in which the step class is defined.
-        input_spec: Input artifacts of the step.
-        output_spec: Output artifacts of the step
-        execution_parameter_names: Execution parameter names of the step.
-        step_function: The actual function to execute when running the step.
-        materializers: Materializer classes for all outputs of the step.
+        artifacts: The ZenML artifacts.
 
     Returns:
-        A TFX component class.
+        TFX channel parameters.
     """
-    component_spec_class = generate_component_spec_class(
-        step_name=step_name,
-        input_spec=input_spec,
-        output_spec=output_spec,
-        execution_parameter_names=execution_parameter_names,
-    )
+    channel_parameters = {}
+    for key, artifact_config in artifacts.items():
+        artifact_class: Type[
+            BaseArtifact
+        ] = source_utils.load_and_validate_class(
+            artifact_config.artifact_source, expected_class=BaseArtifact
+        )
+        channel_parameters[key] = component_spec.ChannelParameter(
+            type=artifact_class
+        )
+    return channel_parameters
 
-    # Create executor class
-    executor_class_name = f"{step_name}_Executor"
+
+def create_executor_class(
+    step: "BaseStep",
+) -> Type["_ZenMLStepExecutor"]:
+    """Creates an executor class for a step.
+
+    Args:
+        step: The step instance for which to create an executor class.
+
+    Returns:
+        The executor class.
+    """
+    executor_class_name = _get_executor_class_name(step.configuration.name)
     executor_class = type(
         executor_class_name,
-        (_FunctionExecutor,),
-        {
-            "_FUNCTION": staticmethod(step_function),
-            "__module__": step_module,
-            "materializers": materializers,
-            PARAM_STEP_NAME: step_name,
-        },
+        (_ZenMLStepExecutor,),
+        {"_STEP": step, "__module__": __name__},
     )
 
-    # Add the executor class to the module in which the step was defined
-    module = sys.modules[step_module]
+    # Add the executor class to the current module, so tfx can load it
+    module = sys.modules[__name__]
     setattr(module, executor_class_name, executor_class)
 
-    return type(
-        step_name,
-        (_ZenMLSimpleComponent,),
-        {
-            "SPEC_CLASS": component_spec_class,
-            "EXECUTOR_SPEC": ExecutorClassSpec(executor_class=executor_class),
-            "__module__": step_module,
-        },
-    )
+    return executor_class
 
 
-class _PropertyDictWrapper(json_utils.Jsonable):
-    """Helper class to wrap inputs/outputs from TFX nodes.
-    Currently, this class is read-only (setting properties is not implemented).
-    Internal class: no backwards compatibility guarantees.
-    Code Credit: https://github.com/tensorflow/tfx/blob
-    /51946061ae3be656f1718a3d62cd47228b89b8f4/tfx/types/node_common.py
+def get_executor_class(step_name: str) -> Optional[Type["_ZenMLStepExecutor"]]:
+    """Gets the executor class for a step.
+
+    Args:
+        step_name: Name of the step for which to get the executor class.
+
+    Returns:
+        The executor class.
     """
-
-    def __init__(
-        self,
-        data: Dict[str, Channel],
-        compat_aliases: Optional[Dict[str, str]] = None,
-    ):
-        """Initializes the wrapper object.
-
-        Args:
-            data: The data to be wrapped.
-            compat_aliases: Compatibility aliases to support deprecated keys.
-        """
-        self._data = data
-        self._compat_aliases = compat_aliases or {}
-
-    def __iter__(self) -> Iterator[str]:
-        """Returns a generator that yields keys of the wrapped dictionary."""
-        yield from self._data
-
-    def __getitem__(self, key: str) -> Channel:
-        """Returns the dictionary value for the specified key."""
-        if key in self._compat_aliases:
-            key = self._compat_aliases[key]
-        return self._data[key]
-
-    def __getattr__(self, key: str) -> Channel:
-        """Returns the dictionary value for the specified key."""
-        if key in self._compat_aliases:
-            key = self._compat_aliases[key]
-        try:
-            return self._data[key]
-        except KeyError:
-            raise AttributeError
-
-    def __repr__(self) -> str:
-        """Returns the representation of the wrapped dictionary."""
-        return repr(self._data)
-
-    def get_all(self) -> Dict[str, Channel]:
-        """Returns the wrapped dictionary."""
-        return self._data
-
-    def keys(self) -> KeysView[str]:
-        """Returns the keys of the wrapped dictionary."""
-        return self._data.keys()
-
-    def values(self) -> ValuesView[Channel]:
-        """Returns the values of the wrapped dictionary."""
-        return self._data.values()
-
-    def items(self) -> ItemsView[str, Channel]:
-        """Returns the items of the wrapped dictionary."""
-        return self._data.items()
+    executor_class_name = _get_executor_class_name(step_name)
+    module = sys.modules[__name__]
+    return getattr(module, executor_class_name, None)
 
 
-class _ZenMLSimpleComponent(_SimpleComponent):
-    """Simple ZenML TFX component with outputs overridden."""
+def _get_executor_class_name(step_name: str) -> str:
+    """Gets the executor class name for a step.
+
+    Args:
+        step_name: Name of the step for which to get the executor class name.
+
+    Returns:
+        The executor class name.
+    """
+    return f"{step_name}_Executor"
+
+
+class _ZenMLStepExecutor(BaseExecutor):
+    """TFX Executor which runs ZenML steps."""
+
+    if TYPE_CHECKING:
+        _STEP: ClassVar["BaseStep"]
 
     @property
-    def outputs(self) -> _PropertyDictWrapper:  # type: ignore[override]
-        """Returns the wrapped spec outputs."""
-        return _PropertyDictWrapper(self.spec.outputs)
-
-
-class _FunctionExecutor(BaseExecutor):
-    """Base TFX Executor class which is compatible with ZenML steps"""
-
-    _FUNCTION = staticmethod(lambda: None)
-    materializers: ClassVar[
-        Optional[Dict[str, Type["BaseMaterializer"]]]
-    ] = None
-
-    def resolve_materializer_with_registry(
-        self, param_name: str, artifact: BaseArtifact
-    ) -> Type[BaseMaterializer]:
-        """Resolves the materializer for the given obj_type.
-
-        Args:
-            param_name: Name of param.
-            artifact: A TFX artifact type.
+    def configuration(self) -> StepConfiguration:
+        """Configuration of the step to execute.
 
         Returns:
-            The right materializer based on the defaults or optionally the one
-            set by the user.
+            The step configuration.
         """
-        if not self.materializers:
-            raise ValueError("Materializers are missing is not set!")
+        return StepConfiguration.parse_obj(self._STEP.configuration)
 
-        materializer_class = self.materializers[param_name]
-        return materializer_class
+    def _load_output_materializers(self) -> Dict[str, Type[BaseMaterializer]]:
+        """Loads the output materializers for the step.
 
-    def resolve_input_artifact(
+        Returns:
+            The step output materializers.
+        """
+        materializers = {}
+        for name, output in self.configuration.outputs.items():
+            materializer_class: Type[
+                BaseMaterializer
+            ] = source_utils.load_and_validate_class(
+                output.materializer_source, expected_class=BaseMaterializer
+            )
+            materializers[name] = materializer_class
+        return materializers
+
+    def _load_input_artifact(
         self, artifact: BaseArtifact, data_type: Type[Any]
     ) -> Any:
-        """Resolves an input artifact, i.e., reading it from the Artifact Store
-        to a pythonic object.
+        """Loads an input artifact.
 
         Args:
-            artifact: A TFX artifact type.
-            data_type: The type of data to be materialized.
+            artifact: The artifact to load.
+            data_type: The data type of the artifact value.
 
         Returns:
-            Return the output of `handle_input()` of selected materializer.
+            The artifact value.
         """
         # Skip materialization for BaseArtifact and its subtypes.
         if issubclass(data_type, BaseArtifact):
@@ -329,55 +333,30 @@ class _FunctionExecutor(BaseExecutor):
                 )
             return artifact
 
-        materializer = source_utils.load_source_path_class(
+        materializer_class = source_utils.load_source_path_class(
             artifact.materializer
-        )(artifact)
-        # The materializer now returns a resolved input
+        )
+        materializer = materializer_class(artifact)
         return materializer.handle_input(data_type=data_type)
 
-    def resolve_output_artifact(
-        self, param_name: str, artifact: BaseArtifact, data: Any
+    def _store_output_artifact(
+        self,
+        materializer_class: Type[BaseMaterializer],
+        materializer_source: str,
+        artifact: BaseArtifact,
+        data: Any,
     ) -> None:
-        """Resolves an output artifact, i.e., writing it to the Artifact Store.
-        Calls `handle_return(return_values)` of the selected materializer.
+        """Stores an output artifact.
 
         Args:
-            param_name: Name of output param.
-            artifact: A TFX artifact type.
-            data: The object to be passed to `handle_return()`.
+            materializer_class: The materializer class to store the artifact.
+            materializer_source: The source of the materializer class.
+            artifact: The artifact to store.
+            data: The data to store in the artifact.
         """
-        # Skip materialization for BaseArtifact and subclasses.
-        if issubclass(type(data), BaseArtifact):
-            return
-
-        materializer_class = self.resolve_materializer_with_registry(
-            param_name, artifact
-        )
-        artifact.materializer = source_utils.resolve_class(materializer_class)
+        artifact.materializer = materializer_source
         artifact.datatype = source_utils.resolve_class(type(data))
         materializer_class(artifact).handle_return(data)
-
-    def check_output_types_match(
-        self, output_value: Any, specified_type: Type[Any]
-    ) -> None:
-        """Raise error if types don't match.
-
-        Args:
-            output_value: Value of output.
-            specified_type: What the type of output should be as defined in the
-            signature.
-
-        Raises:
-            ValueError if types do not match.
-        """
-        # TODO [ENG-160]: Include this check when we figure out the logic of
-        #  slightly different subclasses.
-        if not do_types_match(type(output_value), specified_type):
-            raise ValueError(
-                f"Output `{output_value}` of type {type(output_value)} does "
-                f"not match specified return type {specified_type} in step "
-                f"{getattr(self, PARAM_STEP_NAME)}"
-            )
 
     def Do(
         self,
@@ -385,14 +364,23 @@ class _FunctionExecutor(BaseExecutor):
         output_dict: Dict[str, List[BaseArtifact]],
         exec_properties: Dict[str, Any],
     ) -> None:
-        """Main block for the execution of the step
+        """Main block for the execution of the step.
 
         Args:
             input_dict: dictionary containing the input artifacts
             output_dict: dictionary containing the output artifacts
             exec_properties: dictionary containing the execution parameters
+
+        Raises:
+            MissingStepParameterError: if a required parameter is missing.
+            RuntimeError: if the step fails.
+            StepInterfaceError: if the step interface is not implemented.
         """
-        step_name = getattr(self, PARAM_STEP_NAME)
+        from zenml.steps import BaseParameters
+
+        step_name = self.configuration.name
+        step_function = self._STEP.entrypoint
+        output_materializers = self._load_output_materializers()
 
         # remove all ZenML internal execution properties
         exec_properties = {
@@ -405,7 +393,7 @@ class _FunctionExecutor(BaseExecutor):
         function_params = {}
 
         # First, we parse the inputs, i.e., params and input artifacts.
-        spec = inspect.getfullargspec(inspect.unwrap(self._FUNCTION))
+        spec = inspect.getfullargspec(inspect.unwrap(step_function))
         args = spec.args
 
         if args and args[0] == "self":
@@ -415,7 +403,7 @@ class _FunctionExecutor(BaseExecutor):
             arg_type = spec.annotations.get(arg, None)
             arg_type = resolve_type_annotation(arg_type)
 
-            if issubclass(arg_type, BaseStepConfig):
+            if issubclass(arg_type, BaseParameters):
                 try:
                     config_object = arg_type.parse_obj(exec_properties)
                 except pydantic.ValidationError as e:
@@ -435,13 +423,13 @@ class _FunctionExecutor(BaseExecutor):
                 output_artifacts = {k: v[0] for k, v in output_dict.items()}
                 context = arg_type(
                     step_name=step_name,
-                    output_materializers=self.materializers or {},
+                    output_materializers=output_materializers,
                     output_artifacts=output_artifacts,
                 )
                 function_params[arg] = context
             else:
                 # At this point, it has to be an artifact, so we resolve
-                function_params[arg] = self.resolve_input_artifact(
+                function_params[arg] = self._load_input_artifact(
                     input_dict[arg][0], arg_type
                 )
 
@@ -450,6 +438,15 @@ class _FunctionExecutor(BaseExecutor):
                 "No TFX context is set for the currently running pipeline. "
                 "Cannot retrieve pipeline runtime information."
             )
+
+        pipeline_config = proto_utils.get_pipeline_config(
+            self._context.pipeline_node
+        )
+        step_run_info = StepRunInfo(
+            config=self.configuration,
+            pipeline=pipeline_config,
+            run_name=self._context.pipeline_run_id,
+        )
         # Wrap the execution of the step function in a step environment
         # that the step function code can access to retrieve information about
         # the pipeline runtime, such as the current step name and the current
@@ -457,18 +454,14 @@ class _FunctionExecutor(BaseExecutor):
         with StepEnvironment(
             pipeline_name=self._context.pipeline_info.id,
             pipeline_run_id=self._context.pipeline_run_id,
-            step_name=getattr(self, PARAM_STEP_NAME),
+            step_name=step_name,
+            step_run_info=step_run_info,
+            cache_enabled=self.configuration.enable_cache,
         ):
-            return_values = self._FUNCTION(**function_params)
+            return_values = step_function(**function_params)
 
-        spec = inspect.getfullargspec(inspect.unwrap(self._FUNCTION))
-        return_type: Type[Any] = spec.annotations.get("return", None)
-        if return_type is not None:
-            if isinstance(return_type, Output):
-                output_annotations = list(return_type.items())
-            else:
-                output_annotations = [(SINGLE_RETURN_OUT_NAME, return_type)]
-
+        output_annotations = parse_return_type_annotations(spec.annotations)
+        if len(output_annotations) > 0:
             # if there is only one output annotation (either directly specified
             # or contained in an `Output` tuple) we treat the step function
             # return value as the return for that output
@@ -494,7 +487,7 @@ class _FunctionExecutor(BaseExecutor):
                 )
 
             for return_value, (output_name, output_type) in zip(
-                return_values, output_annotations
+                return_values, output_annotations.items()
             ):
                 if not isinstance(return_value, output_type):
                     raise StepInterfaceError(
@@ -503,8 +496,16 @@ class _FunctionExecutor(BaseExecutor):
                         f"actual type: {type(return_value)})."
                     )
 
-                self.resolve_output_artifact(
-                    output_name, output_dict[output_name][0], return_value
+                materializer_class = output_materializers[output_name]
+                materializer_source = self.configuration.outputs[
+                    output_name
+                ].materializer_source
+
+                self._store_output_artifact(
+                    materializer_class=materializer_class,
+                    materializer_source=materializer_source,
+                    artifact=output_dict[output_name][0],
+                    data=return_value,
                 )
 
         # Write the executor output to the artifact store so the executor

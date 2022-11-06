@@ -11,12 +11,13 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Implementation for the Seldon Deployment step."""
 
+import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, Generator, Optional, Tuple
+from typing import Any, Dict, Generator, Optional, Tuple, cast
 from uuid import UUID
 
-import numpy as np
 import requests
 from pydantic import Field, ValidationError
 
@@ -30,9 +31,6 @@ from zenml.logger import get_logger
 from zenml.services.service import BaseService, ServiceConfig
 from zenml.services.service_status import ServiceState, ServiceStatus
 from zenml.services.service_type import ServiceType
-
-if TYPE_CHECKING:
-    from numpy.typing import NDArray
 
 logger = get_logger(__name__)
 
@@ -53,6 +51,8 @@ class SeldonDeploymentConfig(ServiceConfig):
             https://docs.seldon.io/projects/seldon-core/en/latest/reference/apis/metadata.html).
         extra_args: additional arguments to pass to the Seldon Core deployment
             resource configuration.
+        is_custom_deployment: whether the deployment is a custom deployment
+        spec: custom Kubernetes resource specification for the Seldon Core
     """
 
     model_uri: str = ""
@@ -63,10 +63,11 @@ class SeldonDeploymentConfig(ServiceConfig):
     secret_name: Optional[str]
     model_metadata: Dict[str, Any] = Field(default_factory=dict)
     extra_args: Dict[str, Any] = Field(default_factory=dict)
+    is_custom_deployment: Optional[bool] = False
+    spec: Optional[Dict[Any, Any]] = Field(default_factory=dict)
 
     def get_seldon_deployment_labels(self) -> Dict[str, str]:
-        """Generate the labels for the Seldon Core deployment from the
-        service configuration.
+        """Generate labels for the Seldon Core deployment from the service configuration.
 
         These labels are attached to the Seldon Core deployment resource
         and may be used as label selectors in lookup operations.
@@ -91,8 +92,7 @@ class SeldonDeploymentConfig(ServiceConfig):
         return labels
 
     def get_seldon_deployment_annotations(self) -> Dict[str, str]:
-        """Generate the annotations for the Seldon Core deployment from the
-        service configuration.
+        """Generate annotations for the Seldon Core deployment from the service configuration.
 
         The annotations are used to store additional information about the
         Seldon Core service that is associated with the deployment that is
@@ -153,7 +153,6 @@ class SeldonDeploymentServiceStatus(ServiceStatus):
 class SeldonDeploymentService(BaseService):
     """A service that represents a Seldon Core deployment server.
 
-
     Attributes:
         config: service configuration.
         status: service status.
@@ -183,12 +182,13 @@ class SeldonDeploymentService(BaseService):
             SeldonModelDeployer,
         )
 
-        model_deployer = SeldonModelDeployer.get_active_model_deployer()
+        model_deployer = cast(
+            SeldonModelDeployer, SeldonModelDeployer.get_active_model_deployer()
+        )
         return model_deployer.seldon_client
 
     def check_status(self) -> Tuple[ServiceState, str]:
-        """Check the the current operational state of the Seldon Core
-        deployment.
+        """Check the the current operational state of the Seldon Core deployment.
 
         Returns:
             The operational state of the Seldon Core deployment and a message
@@ -223,8 +223,9 @@ class SeldonDeploymentService(BaseService):
 
     @property
     def seldon_deployment_name(self) -> str:
-        """Get the name of the Seldon Core deployment that uniquely
-        corresponds to this service instance
+        """Get the name of the Seldon Core deployment.
+
+        It should return the one that uniquely corresponds to this service instance.
 
         Returns:
             The name of the Seldon Core deployment.
@@ -232,8 +233,7 @@ class SeldonDeploymentService(BaseService):
         return f"zenml-{str(self.uuid)}"
 
     def _get_seldon_deployment_labels(self) -> Dict[str, str]:
-        """Generate the labels for the Seldon Core deployment from the
-        service configuration.
+        """Generate the labels for the Seldon Core deployment from the service configuration.
 
         Returns:
             The labels for the Seldon Core deployment.
@@ -247,8 +247,9 @@ class SeldonDeploymentService(BaseService):
     def create_from_deployment(
         cls, deployment: SeldonDeployment
     ) -> "SeldonDeploymentService":
-        """Recreate a Seldon Core service from a Seldon Core
-        deployment resource and update their operational status.
+        """Recreate a Seldon Core service from a Seldon Core deployment resource.
+
+        It should then update their operational status.
 
         Args:
             deployment: the Seldon Core deployment resource.
@@ -256,6 +257,10 @@ class SeldonDeploymentService(BaseService):
         Returns:
             The Seldon Core service corresponding to the given
             Seldon Core deployment resource.
+
+        Raises:
+            ValueError: if the given deployment resource does not contain
+                the expected service_uuid label.
         """
         config = SeldonDeploymentConfig.create_from_deployment(deployment)
         uuid = deployment.metadata.labels.get("zenml.service_uuid")
@@ -269,8 +274,9 @@ class SeldonDeploymentService(BaseService):
         return service
 
     def provision(self) -> None:
-        """Provision or update the remote Seldon Core deployment instance to
-        match the current configuration.
+        """Provision or update remote Seldon Core deployment instance.
+
+        This should then match the current configuration.
         """
         client = self._get_client()
 
@@ -284,6 +290,8 @@ class SeldonDeploymentService(BaseService):
             secret_name=self.config.secret_name,
             labels=self._get_seldon_deployment_labels(),
             annotations=self.config.get_seldon_deployment_annotations(),
+            is_custom_deployment=self.config.is_custom_deployment,
+            spec=self.config.spec,
         )
         deployment.spec.replicas = self.config.replicas
         deployment.spec.predictors[0].replicas = self.config.replicas
@@ -323,7 +331,7 @@ class SeldonDeploymentService(BaseService):
             tail: only retrieve the last NUM lines of log output.
 
         Returns:
-            A generator that can be acccessed to get the service logs.
+            A generator that can be accessed to get the service logs.
         """
         return self._get_client().get_deployment_logs(
             self.seldon_deployment_name,
@@ -346,16 +354,18 @@ class SeldonDeploymentService(BaseService):
         if not self.is_running:
             return None
         namespace = self._get_client().namespace
-        model_deployer = SeldonModelDeployer.get_active_model_deployer()
+        model_deployer = cast(
+            SeldonModelDeployer, SeldonModelDeployer.get_active_model_deployer()
+        )
         return os.path.join(
-            model_deployer.base_url,
+            model_deployer.config.base_url,
             "seldon",
             namespace,
             self.seldon_deployment_name,
             "api/v0.1/predictions",
         )
 
-    def predict(self, request: "NDArray[Any]") -> "NDArray[Any]":
+    def predict(self, request: str) -> Any:
         """Make a prediction using the service.
 
         Args:
@@ -363,6 +373,10 @@ class SeldonDeploymentService(BaseService):
 
         Returns:
             A numpy array representing the prediction returned by the service.
+
+        Raises:
+            Exception: if the service is not yet ready.
+            ValueError: if the prediction_url is not set.
         """
         if not self.is_running:
             raise Exception(
@@ -372,9 +386,14 @@ class SeldonDeploymentService(BaseService):
 
         if self.prediction_url is None:
             raise ValueError("`self.prediction_url` is not set, cannot post.")
+
+        if isinstance(request, str):
+            request = json.loads(request)
+        else:
+            raise ValueError("Request must be a json string.")
         response = requests.post(
             self.prediction_url,
-            json={"data": {"ndarray": request.tolist()}},
+            json={"data": {"ndarray": request}},
         )
         response.raise_for_status()
-        return np.array(response.json()["data"]["ndarray"])
+        return response.json()

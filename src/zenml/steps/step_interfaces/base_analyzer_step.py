@@ -11,27 +11,37 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Base analyzer step."""
 
 from abc import abstractmethod
 
 from zenml.artifacts import DataArtifact, SchemaArtifact, StatisticsArtifact
-from zenml.steps import BaseStep, BaseStepConfig, Output, StepContext
+from zenml.steps import BaseParameters, BaseStep, Output, StepContext
 
 
-class BaseAnalyzerConfig(BaseStepConfig):
-    """Base class for analyzer step configurations"""
+class BaseAnalyzerParameters(BaseParameters):
+    """Base class for analyzer step parameters."""
 
 
 class BaseAnalyzerStep(BaseStep):
-    """Base step implementation for any analyzer step implementation on ZenML"""
+    """Base step implementation for any analyzer step implementation."""
 
     @abstractmethod
     def entrypoint(  # type: ignore[override]
         self,
         dataset: DataArtifact,
-        config: BaseAnalyzerConfig,
+        params: BaseAnalyzerParameters,
         context: StepContext,
     ) -> Output(  # type:ignore[valid-type]
         statistics=StatisticsArtifact, schema=SchemaArtifact
     ):
-        """Base entrypoint for any analyzer implementation"""
+        """Base entrypoint for any analyzer implementation.
+
+        Args:
+            dataset: The dataset to analyze.
+            params: The parameters for the step.
+            context: The context for the step.
+
+        Returns:
+            The statistics and the schema of the given dataset.
+        """

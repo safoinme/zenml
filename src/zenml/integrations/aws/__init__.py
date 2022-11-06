@@ -11,49 +11,49 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""
+"""Integrates multiple AWS Tools as Stack Components.
+
 The AWS integration provides a way for our users to manage their secrets
-through AWS.
+through AWS, a way to use the aws container registry. Additionally, the
+Sagemaker integration submodule provides a way to run ZenML steps in
+Sagemaker.
 """
-from typing import List
+from typing import List, Type
 
 from zenml.enums import StackComponentType
 from zenml.integrations.constants import AWS
 from zenml.integrations.integration import Integration
-from zenml.zen_stores.models import FlavorWrapper
+from zenml.models import FlavorModel
+from zenml.stack import Flavor
 
 AWS_SECRET_MANAGER_FLAVOR = "aws"
 AWS_CONTAINER_REGISTRY_FLAVOR = "aws"
+AWS_SAGEMAKER_STEP_OPERATOR_FLAVOR = "sagemaker"
 
 
 class AWSIntegration(Integration):
     """Definition of AWS integration for ZenML."""
 
     NAME = AWS
-    REQUIREMENTS = ["boto3==1.21.21"]
+    REQUIREMENTS = ["boto3==1.21.0", "sagemaker==2.82.2"]
 
     @classmethod
-    def activate(cls) -> None:
-        """Activates the integration."""
-        from zenml.integrations.aws import secret_schemas  # noqa
+    def flavors(cls) -> List[Type[Flavor]]:
+        """Declare the stack component flavors for the AWS integration.
 
-    @classmethod
-    def flavors(cls) -> List[FlavorWrapper]:
-        """Declare the stack component flavors for the AWS integration."""
+        Returns:
+            List of stack component flavors for this integration.
+        """
+        from zenml.integrations.aws.flavors import (
+            AWSContainerRegistryFlavor,
+            AWSSecretsManagerFlavor,
+            SagemakerStepOperatorFlavor,
+        )
+
         return [
-            FlavorWrapper(
-                name=AWS_SECRET_MANAGER_FLAVOR,
-                source="zenml.integrations.aws.secrets_managers"
-                ".AWSSecretsManager",
-                type=StackComponentType.SECRETS_MANAGER,
-                integration=cls.NAME,
-            ),
-            FlavorWrapper(
-                name=AWS_CONTAINER_REGISTRY_FLAVOR,
-                source="zenml.integrations.aws.container_registries.AWSContainerRegistry",
-                type=StackComponentType.CONTAINER_REGISTRY,
-                integration=cls.NAME,
-            ),
+            AWSSecretsManagerFlavor,
+            AWSContainerRegistryFlavor,
+            SagemakerStepOperatorFlavor,
         ]
 
 

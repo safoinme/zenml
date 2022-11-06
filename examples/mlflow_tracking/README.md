@@ -9,7 +9,7 @@ This example showcases how easily mlflow tracking can be integrated into a ZenML
 of code.
 
 We'll be using the
-[Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist) dataset and
+[MNIST-digits](https://keras.io/api/datasets/mnist/) dataset and
 will train a classifier using [Tensorflow (Keras)](https://www.tensorflow.org/).
 We will run two experiments with different parameters (epochs and learning rate)
 and log these experiments into a local mlflow backend.
@@ -31,18 +31,14 @@ documentation](https://www.mlflow.org/docs/latest/tracking.html#scenario-1-mlflo
 for details.
 
 ## 🧰 How the example is implemented
-Adding MLFlow tracking to a step is a simple as adding the mlflow decorator. Now you're free to log anything from within 
+Adding MLflow tracking to a step is a enabling the experiment tracker for a step. Now you're free to log anything from within 
 the step to mlflow. 
 
 ZenML ties all the logs from all steps within a pipeline run together into one mlflow run so that you can see everything
 in one place.
 
  ```python
-from zenml.integrations.mlflow.mlflow_step_decorator import enable_mlflow
-
-# Define the step and enable mlflow - order of decorators is important here
-@enable_mlflow
-@step
+@step(experiment_tracker="<NAME_OF_EXPERIMENT_TRACKER>")
 def tf_trainer(
     x_train: np.ndarray,
     y_train: np.ndarray,
@@ -58,7 +54,50 @@ def tf_trainer(
     
     return model
 ```
+You can also log parameters, metrics and artifacts into nested runs, which 
+will be children of the pipeline run. To do so, enable it in the settings like this:
 
+```python
+from zenml.integrations.mlflow.flavors.mlflow_experiment_tracker_flavor import MLFlowExperimentTrackerSettings
+
+@step(
+    experiment_tracker="<NAME_OF_EXPERIMENT_TRACKER>",
+    settings={
+        "experiment_tracker.mlflow": MLFlowExperimentTrackerSettings(
+            nested=True
+        )
+    }
+)
+def tf_trainer(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+) -> tf.keras.Model:
+    """Train a neural net from scratch to recognize MNIST digits return our
+    model or the learner"""
+    
+    # compile model
+
+    mlflow.tensorflow.autolog()
+    
+    # train model
+    
+    return model
+```
+If you want to enable MLflow tracking when using the class-based API, simply configure your step as follows:
+
+```python
+class TFTrainer(BaseStep):
+    def entrypoint(
+        self,
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+    ) -> tf.keras.Model:
+        mlflow.tensorflow.autolog()
+        ...
+
+step_instance = TFTrainer()
+step_instance.configure(experiment_tracker="<NAME_OF_EXPERIMENT_TRACKER>")
+```
 # 🖥 Run it locally
 
 ## ⏩ SuperQuick `mlflow_tracking` run
@@ -76,11 +115,10 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
-zenml integration install mlflow
-zenml integration install tensorflow
+zenml integration install mlflow tensorflow
 
 # pull example
 zenml example pull mlflow_tracking
@@ -89,16 +127,16 @@ cd zenml_examples/mlflow_tracking
 # Initialize ZenML repo
 zenml init
 
-# Create the stack with the mlflow experiment tracker component
-zenml experiment-tracker register mlflow_tracker --type=mlflow
+# Start the ZenServer to enable dashboard access
+zenml up
+
+# Create and activate the stack with the mlflow experiment tracker component
+zenml experiment-tracker register mlflow_tracker --flavor=mlflow
 zenml stack register mlflow_stack \
-    -m default \
     -a default \
     -o default \
     -e mlflow_tracker
-    
-# Activate the newly created stack
-zenml stack set mlflow_stack
+    --set
 ```
 
 ### ▶️ Run the Code
@@ -106,6 +144,12 @@ Now we're ready. Execute:
 
 ```bash
 python run.py
+```
+
+Alternatively, if you want to run based on the config.yaml you can run with:
+
+```bash
+zenml pipeline run pipelines/training_pipeline/training_pipeline.py -c config.yaml
 ```
 
 ### 🔮 See results
@@ -134,7 +178,8 @@ rm -rf <SPECIFIC_MLRUNS_PATH_GOES_HERE>
 
 # 📜 Learn more
 
-Our docs regarding the mlflow tracking integration can be found [here](TODO: Link to docs).
+Our docs regarding the MLflow experiment tracker integration can be found [here](https://docs.zenml.io/component-gallery/experiment-trackers/mlflow).
 
-If you want to learn more about the implementation in general or about how to build your own decorators in zenml
-check out our [docs](TODO: Link to docs)
+
+If you want to learn more about experiment trackers in general or about how to build your own experiment trackers in ZenML
+check out our [docs](https://docs.zenml.io/component-gallery/experiment-trackers/custom).

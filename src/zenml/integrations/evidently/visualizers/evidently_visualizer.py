@@ -11,42 +11,45 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Implementation of the Evidently visualizer."""
 
 import tempfile
 import webbrowser
 from abc import abstractmethod
 from typing import Any
 
-from zenml.artifacts import DataAnalysisArtifact
+from zenml.artifacts.data_artifact import DataArtifact
 from zenml.environment import Environment
 from zenml.logger import get_logger
 from zenml.post_execution import StepView
-from zenml.visualizers import BaseStepVisualizer
+from zenml.visualizers import BaseVisualizer
 
 logger = get_logger(__name__)
 
 
-class EvidentlyVisualizer(BaseStepVisualizer):
+class EvidentlyVisualizer(BaseVisualizer):
     """The implementation of an Evidently Visualizer."""
 
     @abstractmethod
     def visualize(self, object: StepView, *args: Any, **kwargs: Any) -> None:
-        """Method to visualize components
+        """Method to visualize components.
 
         Args:
             object: StepView fetched from run.get_step().
+            *args: Additional arguments.
+            **kwargs: Additional keyword arguments.
         """
         for artifact_view in object.outputs.values():
-            # filter out anything but data analysis artifacts
+            # filter out anything but data artifacts
             if (
-                artifact_view.type == DataAnalysisArtifact.__name__
+                artifact_view.type == DataArtifact.__name__
                 and artifact_view.data_type == "builtins.str"
             ):
                 artifact = artifact_view.read()
                 self.generate_facet(artifact)
 
     def generate_facet(self, html_: str) -> None:
-        """Generate a Facet Overview
+        """Generate a Facet Overview.
 
         Args:
             html_: HTML represented as a string.

@@ -36,10 +36,10 @@ In order to run this example, you need to install and initialize ZenML:
 
 ```shell
 # install CLI
-pip install zenml
+pip install "zenml[server]"
 
 # install ZenML integrations
-zenml integration install scipy
+zenml integration install sklearn
 
 # pull example
 zenml example pull scipy
@@ -47,6 +47,9 @@ cd zenml_examples/scipy
 
 # Initialize ZenML repo
 zenml init
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 ### ▶️ Run the Code
@@ -56,6 +59,13 @@ Now we're ready. Execute:
 ```bash
 python run.py
 ```
+
+Alternatively, if you want to run based on the config.yaml you can run with:
+
+```bash
+zenml pipeline run pipelines/training_pipeline/training_pipeline.py -c config.yaml
+```
+
 
 ### 🧽 Clean up
 

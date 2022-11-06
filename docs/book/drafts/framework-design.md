@@ -54,7 +54,7 @@ One small step for data scientist..
 
 ### Simple Functions
 
-We wanted to make simple Python functions be ZenML steps with just one decorator:
+We wanted to make basic Python functions be ZenML steps with just one decorator:
 
 ```python
 @step
@@ -118,14 +118,14 @@ The reason is that ZenML needs to distinguish between `Artifacts` (i.e. data out
 The way ZenML solves this is by bundling the params in a special class and passing them in like so:
 
 ```python
-from zenml.steps import BaseStepConfig
+from zenml.steps import BaseParameters
 
-class Config(BaseStepConfig):
+class Params(BaseParameters):
   add_amount: int = 1  # set a default
   
 @step
-def adds(some_num: int, config: Config) -> int:
-    return some_num + config.add_amount  # we can whatever we want!
+def adds(some_num: int, params: Params) -> int:
+    return some_num + params.add_amount  # we can whatever we want!
 
 @pipeline
 def pipeline(first, second):
@@ -152,7 +152,7 @@ you might want to read in a `pandas` dataframe as a `pandas` dataframe, but mayb
 Dataloader or a Tensorflow dataset. That's where the power of Materializers kicks in.
 
 The disadvantage of this design is that one needs to implement Materializers for all different data types, which is 
-hard. Luckily, ZenML comes built-in with many standard Materializers and allows you to easily add your own 
+hard. Luckily, ZenML comes built-in with many standard Materializers and also allows you to add your own 
 Materializers for custom workflows.
 
 ## Materializers and the Post Execution Workflow

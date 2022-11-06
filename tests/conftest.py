@@ -15,26 +15,50 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import Generator
+from uuid import uuid4
 
 import pytest
 from py._builtin import execfile
 from pytest_mock import MockerFixture
 
 from tests.venv_clone_utils import clone_virtualenv
+from zenml.artifact_stores.local_artifact_store import (
+    LocalArtifactStore,
+    LocalArtifactStoreConfig,
+)
 from zenml.artifacts.base_artifact import BaseArtifact
+from zenml.client import Client
 from zenml.config.global_config import GlobalConfiguration
-from zenml.config.profile_config import ProfileConfiguration
-from zenml.constants import ENV_ZENML_DEBUG
+from zenml.constants import ENV_ZENML_DEBUG, TEST_STEP_INPUT_INT
+from zenml.container_registries.base_container_registry import (
+    BaseContainerRegistry,
+    BaseContainerRegistryConfig,
+)
+from zenml.enums import ArtifactType, ExecutionStatus
 from zenml.materializers.base_materializer import BaseMaterializer
+from zenml.models.pipeline_models import (
+    ArtifactModel,
+    PipelineRunModel,
+    StepRunModel,
+)
+from zenml.models.user_management_models import TeamModel
+from zenml.orchestrators.base_orchestrator import BaseOrchestratorConfig
+from zenml.orchestrators.local.local_orchestrator import LocalOrchestrator
 from zenml.pipelines import pipeline
-from zenml.repository import Repository
+from zenml.post_execution.pipeline_run import PipelineRunView
+from zenml.post_execution.step import StepView
+from zenml.stack.stack import Stack
+from zenml.stack.stack_component import StackComponentConfig, StackComponentType
 from zenml.steps import StepContext, step
+from zenml.zen_stores.base_zen_store import BaseZenStore
+from zenml.zen_stores.sql_zen_store import SqlZenStore, SqlZenStoreConfiguration
 
 
-@pytest.fixture(scope="session", autouse=True)
-def base_repo(
+@pytest.fixture(scope="module", autouse=True)
+def base_client(
     tmp_path_factory: pytest.TempPathFactory,
     session_mocker: MockerFixture,
     request: pytest.FixtureRequest,
@@ -42,20 +66,12 @@ def base_repo(
     """Fixture to get a base clean global configuration and repository for all
     tests."""
 
-    # the global configuration and repository must not have been instantiated
-    # yet, otherwise the current working configuration might be affected
-    assert GlobalConfiguration.get_instance() is None
-    assert Repository.get_instance() is None
-
     # original working directory
     orig_cwd = os.getcwd()
 
     # set env variables
     os.environ[ENV_ZENML_DEBUG] = "true"
     os.environ["ZENML_ANALYTICS_OPT_IN"] = "false"
-    os.environ["ZENML_DEFAULT_STORE_TYPE"] = request.config.getoption(
-        "store_type"
-    )
 
     # change the working directory to a fresh temp path
     tmp_path = tmp_path_factory.mktemp("tmp")
@@ -65,72 +81,55 @@ def base_repo(
     logging.info(f"Tests are running in path: {tmp_path}")
 
     # set the ZENML_CONFIG_PATH environment variable to ensure that the global
-    # configuration, the configuration profiles and the local stacks used during
-    # testing are separate from those used in the current environment
+    # configuration and the local stacks used during testing are separate from
+    # those used in the current environment
     os.environ["ZENML_CONFIG_PATH"] = str(tmp_path / "zenml")
 
     session_mocker.patch("analytics.track")
+    session_mocker.patch("analytics.group")
+    session_mocker.patch("analytics.identify")
 
-    # initialize repo at the new path
-    repo = Repository()
+    # initialize global config, repo and zen store at the new path
+    GlobalConfiguration()
+    client = Client()
+    _ = client.zen_store
 
     # monkey patch original cwd in for later use and yield
-    repo.original_cwd = orig_cwd
-    yield repo
+    client.original_cwd = orig_cwd
+    yield client
 
-    # clean up
+    # remove all traces, and change working directory back to base path
     os.chdir(orig_cwd)
-    shutil.rmtree(tmp_path)
+    if sys.platform == "win32":
+        try:
+            shutil.rmtree(tmp_path)
+        except PermissionError:
+            # Windows does not have the concept of unlinking a file and deleting
+            #  once all processes that are accessing the resource are done
+            #  instead windows tries to delete immediately and fails with a
+            #  PermissionError: [WinError 32] The process cannot access the
+            #  file because it is being used by another process
+            logging.debug(
+                "Skipping deletion of temp dir at teardown, due to "
+                "Windows Permission error"
+            )
+            # TODO[HIGH]: Implement fixture cleanup for Windows where
+            #  shutil.rmtree fails on files that are in use on python 3.7 and
+            #  3.8
+    else:
+        shutil.rmtree(tmp_path)
 
     # reset the global configuration and the repository
     GlobalConfiguration._reset_instance()
-    Repository._reset_instance()
-
-
-@pytest.fixture(scope="module", autouse=True)
-def base_profile(
-    base_repo: Repository,
-    request: pytest.FixtureRequest,
-) -> Generator[Repository, None, None]:
-    """Creates and activates a clean profile with a fresh default stack for all
-    tests in a module.
-
-    Args:
-        base_repo: The base ZenML repository for tests.
-        request: Pytest FixtureRequest object
-
-    Yields:
-        The input repository with a provisioned profile.
-    """
-    gc = GlobalConfiguration()
-
-    profile_name = request.node.name
-    profile_name = profile_name.replace(".", "_")
-    profile = ProfileConfiguration(name=profile_name)
-
-    gc.add_or_update_profile(profile)
-
-    original_profile = base_repo.active_profile_name
-
-    base_repo.activate_profile(profile_name)
-
-    logging.info(
-        f"Tests are running in clean profile '{profile_name}' with store type "
-        f"'{profile.store_type.value}'"
-    )
-
-    yield base_repo
-
-    base_repo.activate_profile(original_profile)
-    gc.delete_profile(profile_name)
+    Client._reset_instance()
 
 
 @pytest.fixture
-def clean_repo(
+def clean_client(
     request: pytest.FixtureRequest,
     tmp_path_factory: pytest.TempPathFactory,
-    base_repo: Repository,
-) -> Repository:
+    base_client,
+) -> Client:
     """Fixture to get a clean global configuration and repository for an
     individual test.
 
@@ -138,8 +137,6 @@ def clean_repo(
         request: Pytest FixtureRequest object
         tmp_path_factory: Pytest TempPathFactory in order to create a new
                           temporary directory
-        mocker: Pytest mocker to patch away the
-                zenml.io.utils.get_global_config_directory
         base_repo: Fixture that returns the base_repo that all tests use
     """
     orig_cwd = os.getcwd()
@@ -157,47 +154,180 @@ def clean_repo(
     # save the current global configuration and repository singleton instances
     # to restore them later, then reset them
     original_config = GlobalConfiguration.get_instance()
-    original_repository = Repository.get_instance()
+    original_repository = Client.get_instance()
     GlobalConfiguration._reset_instance()
-    Repository._reset_instance()
+    Client._reset_instance()
 
     # set the ZENML_CONFIG_PATH environment variable to ensure that the global
-    # configuration, the configuration profiles and the local stacks used in
-    # the scope of this function are separate from those used in the global
-    # testing environment
+    # configuration and the local stacks used in the scope of this function are
+    # separate from those used in the global testing environment
     os.environ["ZENML_CONFIG_PATH"] = str(tmp_path / "zenml")
 
-    # initialize repo with new tmp path
-    repo = Repository()
+    # initialize global config, repo and zen store at the new path
+    GlobalConfiguration()
+    client = Client()
+    _ = client.zen_store
 
     # monkey patch base repo cwd for later user and yield
-    repo.original_cwd = base_repo.original_cwd
+    client.original_cwd = base_client.original_cwd
 
-    yield repo
+    yield client
 
     # remove all traces, and change working directory back to base path
     os.chdir(orig_cwd)
-    try:
+    if sys.platform == "win32":
+        try:
+            shutil.rmtree(tmp_path)
+        except PermissionError:
+            # Windows does not have the concept of unlinking a file and deleting
+            #  once all processes that are accessing the resource are done
+            #  instead windows tries to delete immediately and fails with a
+            #  PermissionError: [WinError 32] The process cannot access the
+            #  file because it is being used by another process
+            logging.debug(
+                "Skipping deletion of temp dir at teardown, due to "
+                "Windows Permission error"
+            )
+            # TODO[HIGH]: Implement fixture cleanup for Windows where
+            #  shutil.rmtree fails on files that are in use on python 3.7 and
+            #  3.8
+    else:
         shutil.rmtree(tmp_path)
-    except PermissionError:
-        # Windows does not have the concept of unlinking a file and deleting
-        #  once all processes that are accessing the resource are done
-        #  instead windows tries to delete immediately and fails with a
-        #  PermissionError: [WinError 32] The process cannot access the
-        #  file because it is being used by another process
-        logging.debug(
-            "Skipping deletion of temp dir at teardown, due to "
-            "Windows Permission error"
-        )
-        # Todo[HIGH]: Implement fixture cleanup for Windows where shutil.rmtree
-        #  fails on files that are in use on python 3.7
 
     # restore the global configuration path
     os.environ["ZENML_CONFIG_PATH"] = orig_config_path
 
     # restore the original global configuration and the repository singleton
     GlobalConfiguration._reset_instance(original_config)
-    Repository._reset_instance(original_repository)
+    Client._reset_instance(original_repository)
+
+
+@pytest.fixture
+def sql_store() -> BaseZenStore:
+    temp_dir = tempfile.TemporaryDirectory(suffix="_zenml_sql_test")
+    store = SqlZenStore(
+        config=SqlZenStoreConfiguration(
+            url=f"sqlite:///{Path(temp_dir.name) / 'store.db'}"
+        ),
+        track_analytics=False,
+    )
+    default_project = store.list_projects()[0]
+    default_stack = store.list_stacks()[0]
+    active_user = store.list_users()[0]
+    yield {
+        "store": store,
+        "default_project": default_project,
+        "default_stack": default_stack,
+        "active_user": active_user,
+    }
+
+
+@pytest.fixture
+def sql_store_with_run() -> BaseZenStore:
+    temp_dir = tempfile.TemporaryDirectory(suffix="_zenml_sql_test")
+
+    GlobalConfiguration().set_store(
+        config=SqlZenStoreConfiguration(
+            url=f"sqlite:///{Path(temp_dir.name) / 'store.db'}"
+        ),
+    )
+    store = GlobalConfiguration().zen_store
+
+    default_project = store.list_projects()[0]
+    default_stack = store.list_stacks()[0]
+    active_user = store.list_users()[0]
+
+    @step
+    def step_one() -> int:
+        return TEST_STEP_INPUT_INT
+
+    @step
+    def step_two(input: int) -> int:
+        return input + 1
+
+    @pipeline
+    def test_pipeline(step_one, step_two):
+        value = step_one()
+        step_two(value)
+
+    test_pipeline(step_one=step_one(), step_two=step_two()).run()
+    pipeline_run = store.list_runs()[0]
+    pipeline_step = store.list_run_steps(pipeline_run.id)[1]
+
+    yield {
+        "store": store,
+        "default_project": default_project,
+        "default_stack": default_stack,
+        "active_user": active_user,
+        "pipeline_run": pipeline_run,
+        "step": pipeline_step,
+    }
+
+
+@pytest.fixture
+def sql_store_with_runs() -> BaseZenStore:
+    temp_dir = tempfile.TemporaryDirectory(suffix="_zenml_sql_test")
+
+    GlobalConfiguration().set_store(
+        config=SqlZenStoreConfiguration(
+            url=f"sqlite:///{Path(temp_dir.name) / 'store.db'}"
+        ),
+    )
+    store = GlobalConfiguration().zen_store
+
+    default_project = store.list_projects()[0]
+    default_stack = store.list_stacks()[0]
+    active_user = store.list_users()[0]
+
+    @step
+    def step_one() -> int:
+        return TEST_STEP_INPUT_INT
+
+    @step
+    def step_two(input: int) -> int:
+        return input + 1
+
+    @pipeline
+    def test_pipeline(step_one, step_two):
+        value = step_one()
+        step_two(value)
+
+    for _ in range(10):
+        test_pipeline(step_one=step_one(), step_two=step_two()).run()
+
+    pipeline_runs = store.list_runs()
+
+    yield {
+        "store": store,
+        "default_project": default_project,
+        "default_stack": default_stack,
+        "active_user": active_user,
+        "pipeline_runs": pipeline_runs,
+    }
+
+
+@pytest.fixture
+def sql_store_with_team() -> BaseZenStore:
+    temp_dir = tempfile.TemporaryDirectory(suffix="_zenml_sql_test")
+    store = SqlZenStore(
+        config=SqlZenStoreConfiguration(
+            url=f"sqlite:///{Path(temp_dir.name) / 'store.db'}"
+        ),
+        track_analytics=False,
+    )
+    new_team = TeamModel(name="arias_team")
+    store.create_team(new_team)
+    default_project = store.list_projects()[0]
+    default_stack = store.list_stacks()[0]
+    active_user = store.list_users()[0]
+    default_team = store.list_teams()[0]
+    yield {
+        "store": store,
+        "default_project": default_project,
+        "default_stack": default_stack,
+        "active_user": active_user,
+        "default_team": default_team,
+    }
 
 
 @pytest.fixture
@@ -235,6 +365,126 @@ def files_dir(request: pytest.FixtureRequest, tmp_path: Path) -> Path:
             shutil.copytree(test_function_dir, tmp_path)
 
     return tmp_path
+
+
+@pytest.fixture
+def local_stack():
+    """Returns a local stack with local orchestrator and artifact store."""
+    orchestrator = LocalOrchestrator(
+        name="",
+        id=uuid4(),
+        config=StackComponentConfig(),
+        flavor="default",
+        type=StackComponentType.ORCHESTRATOR,
+        user=uuid4(),
+        project=uuid4(),
+        created=datetime.now(),
+        updated=datetime.now(),
+    )
+    artifact_store = LocalArtifactStore(
+        name="",
+        id=uuid4(),
+        config=LocalArtifactStoreConfig(),
+        flavor="default",
+        type=StackComponentType.ARTIFACT_STORE,
+        user=uuid4(),
+        project=uuid4(),
+        created=datetime.now(),
+        updated=datetime.now(),
+    )
+    return Stack(
+        id=uuid4(),
+        name="",
+        orchestrator=orchestrator,
+        artifact_store=artifact_store,
+    )
+
+
+@pytest.fixture
+def local_orchestrator():
+    """Returns a local orchestrator."""
+    return LocalOrchestrator(
+        name="",
+        id=uuid4(),
+        config=BaseOrchestratorConfig(),
+        flavor="local",
+        type=StackComponentType.ORCHESTRATOR,
+        user=uuid4(),
+        project=uuid4(),
+        created=datetime.now(),
+        updated=datetime.now(),
+    )
+
+
+@pytest.fixture
+def local_artifact_store():
+    """Fixture that creates a local artifact store for testing."""
+    return LocalArtifactStore(
+        name="",
+        id=uuid4(),
+        config=LocalArtifactStoreConfig(),
+        flavor="local",
+        type=StackComponentType.ARTIFACT_STORE,
+        user=uuid4(),
+        project=uuid4(),
+        created=datetime.now(),
+        updated=datetime.now(),
+    )
+
+
+@pytest.fixture
+def remote_artifact_store():
+    """Fixture that creates a local artifact store for testing."""
+    from zenml.integrations.gcp.artifact_stores.gcp_artifact_store import (
+        GCPArtifactStore,
+    )
+    from zenml.integrations.gcp.flavors.gcp_artifact_store_flavor import (
+        GCPArtifactStoreConfig,
+    )
+
+    return GCPArtifactStore(
+        name="",
+        id=uuid4(),
+        config=GCPArtifactStoreConfig(path="gs://bucket"),
+        flavor="gcp",
+        type=StackComponentType.ARTIFACT_STORE,
+        user=uuid4(),
+        project=uuid4(),
+        created=datetime.now(),
+        updated=datetime.now(),
+    )
+
+
+@pytest.fixture
+def local_container_registry():
+    """Fixture that creates a local container registry for testing."""
+    return BaseContainerRegistry(
+        name="",
+        id=uuid4(),
+        config=BaseContainerRegistryConfig(uri="localhost:5000"),
+        flavor="default",
+        type=StackComponentType.CONTAINER_REGISTRY,
+        user=uuid4(),
+        project=uuid4(),
+        created=datetime.now(),
+        updated=datetime.now(),
+    )
+
+
+@pytest.fixture
+def remote_container_registry():
+    """Fixture that creates a remote container registry for testing."""
+    return BaseContainerRegistry(
+        name="",
+        id=uuid4(),
+        config=BaseContainerRegistryConfig(uri="gcr.io/my-project"),
+        flavor="default",
+        type=StackComponentType.CONTAINER_REGISTRY,
+        user=uuid4(),
+        project=uuid4(),
+        created=datetime.now(),
+        updated=datetime.now(),
+    )
 
 
 @pytest.fixture
@@ -333,13 +583,84 @@ def step_context_with_single_output():
 
 @pytest.fixture
 def step_context_with_two_outputs():
-    materializers = {"output_1": BaseMaterializer, "output_2": BaseMaterializer}
+    materializers = {
+        "output_1": BaseMaterializer,
+        "output_2": BaseMaterializer,
+    }
     artifacts = {"output_1": BaseArtifact(), "output_2": BaseArtifact()}
 
     return StepContext(
         step_name="",
         output_materializers=materializers,
         output_artifacts=artifacts,
+    )
+
+
+@pytest.fixture
+def sample_step_model() -> StepRunModel:
+    """Return a sample step model for testing purposes"""
+    return StepRunModel(
+        id=uuid4(),
+        name="sample_step",
+        parents_step_ids=[0],
+        entrypoint_name="sample_entrypoint",
+        parameters={},
+        mlmd_parent_step_ids=[],
+        pipeline_run_id=uuid4(),
+        parent_step_ids=[],
+        input_artifacts={},
+        step_configuration={},
+        status=ExecutionStatus.COMPLETED,
+    )
+
+
+@pytest.fixture
+def sample_step_view(sample_step_model) -> StepView:
+    """Return a sample step view for testing purposes"""
+    return StepView(sample_step_model)
+
+
+@pytest.fixture
+def sample_pipeline_run_model() -> PipelineRunModel:
+    """Return sample pipeline run view for testing purposes"""
+    return PipelineRunModel(
+        id=uuid4(),
+        name="sample_run_name",
+        user=uuid4(),
+        project=uuid4(),
+        pipeline_configuration={},
+        num_steps=1,
+        status=ExecutionStatus.COMPLETED,
+    )
+
+
+@pytest.fixture
+def sample_pipeline_run_view(
+    sample_step_view, sample_pipeline_run_model
+) -> PipelineRunView:
+    """Return sample pipeline run view for testing purposes"""
+    sample_pipeline_run_view = PipelineRunView(sample_pipeline_run_model)
+    setattr(
+        sample_pipeline_run_view,
+        "_steps",
+        {sample_step_view.name: sample_step_view},
+    )
+    return sample_pipeline_run_view
+
+
+@pytest.fixture
+def sample_artifact_model() -> ArtifactModel:
+    """Return a sample artifact model for testing purposes"""
+    return ArtifactModel(
+        id=uuid4(),
+        name="sample_artifact",
+        uri="sample_uri",
+        type=ArtifactType.DATA,
+        materializer="sample_materializer",
+        data_type="sample_data_type",
+        parent_step_id=uuid4(),
+        producer_step_id=uuid4(),
+        is_cached=False,
     )
 
 
@@ -426,7 +747,8 @@ def pytest_addoption(parser):
         * an option to disable the use of the virtualenv fixture. This might be
         useful for local integration testing in case you do not care about your
         base environment being affected
-        * an option to use a specific store type for the profiles
+        * an option to use a specific secrets manager flavor in the secrets
+        manager integration tests
 
     How to use this option:
 
@@ -434,7 +756,7 @@ def pytest_addoption(parser):
 
         ```pytest tests/integration/test_examples.py --use-virtualenv```
 
-        ```pytest tests/integration/test_examples.py --store-type sql```
+        ```pytest tests/integration/test_examples.py --secrets-manager-flavor aws```
 
     """
     parser.addoption(
@@ -450,10 +772,10 @@ def pytest_addoption(parser):
         help="Run Integration tests in cloned env",
     )
     parser.addoption(
-        "--store-type",
+        "--secrets-manager-flavor",
         action="store",
         default="local",
-        help="The type of store back-end to use for profiles (local, sql, etc)",
+        help="The flavor of secrets manager to use (local, aws, etc)",
     )
 
 
@@ -462,7 +784,7 @@ def pytest_generate_tests(metafunc):
     the cli options."""
     if "repo_fixture_name" in metafunc.fixturenames:
         if metafunc.config.getoption("on_kubeflow"):
-            repos = ["clean_kubeflow_profile"]
+            repos = ["clean_kubeflow_repo"]
         else:
-            repos = ["clean_base_profile"]
+            repos = ["clean_base_repo"]
         metafunc.parametrize("repo_fixture_name", repos)

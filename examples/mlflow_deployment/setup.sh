@@ -3,12 +3,11 @@
 set -Eeo pipefail
 
 setup_stack () {
-  zenml model-deployer register mlflow_deployer --type=mlflow || \
+  zenml model-deployer register mlflow_deployer --flavor=mlflow || \
     msg "${WARNING}Reusing preexisting model deployer ${NOFORMAT}mlflow_deployer"
-  zenml experiment-tracker register mlflow_tracker  --type=mlflow || \
+  zenml experiment-tracker register mlflow_tracker  --flavor=mlflow || \
     msg "${WARNING}Reusing preexisting experiment tracker ${NOFORMAT}mlflow_tracker"
   zenml stack register local_mlflow_stack \
-      -m default \
       -a default \
       -o default \
       -d mlflow_deployer \
@@ -19,13 +18,11 @@ setup_stack () {
 }
 
 pre_run () {
-  zenml integration install tensorflow
-  zenml integration install mlflow
+  zenml integration install tensorflow mlflow
 }
 
 pre_run_forced () {
-  zenml integration install tensorflow -y
-  zenml integration install mlflow -y
+  zenml integration install tensorflow mlflow -y
 }
 
 post_run () {

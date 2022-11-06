@@ -11,22 +11,20 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Utils for the ZenML service module."""
 
 from typing import Optional
 
-from zenml.repository import Repository
+from zenml.post_execution import get_pipeline
 from zenml.services.service import BaseService
-from zenml.steps.step_context import StepContext
 
 
 def load_last_service_from_step(
     pipeline_name: str,
     step_name: str,
-    step_context: Optional[StepContext] = None,
     running: bool = False,
 ) -> Optional[BaseService]:
-    """Get the last service created by the pipeline and step with the given
-    names.
+    """Get the last service created by the pipeline and step with the given names.
 
     This function searches backwards through the execution history for a
     named pipeline step and returns the first service instance that it finds
@@ -35,7 +33,6 @@ def load_last_service_from_step(
     Args:
         pipeline_name: the name of the pipeline
         step_name: pipeline step name
-        step_context: step context required only when called from within a step
         running: when this flag is set, the search only returns a running
             service
 
@@ -45,19 +42,14 @@ def load_last_service_from_step(
 
     Raises:
         KeyError: if the pipeline or step name is not found in the execution.
+        RuntimeError: if the artifact is not a service.
     """
-    if step_context is None:
-        repo = Repository()
-        pipeline = repo.get_pipeline(pipeline_name)
-    else:
-        pipeline = step_context.metadata_store.get_pipeline(
-            pipeline_name=pipeline_name
-        )
+    pipeline = get_pipeline(pipeline_name)
     if pipeline is None:
         raise KeyError(f"No pipeline with name `{pipeline_name}` was found")
 
     for run in reversed(pipeline.runs):
-        step = run.get_step(name=step_name)
+        step = run.get_step(step=step_name)
         for artifact_view in step.outputs.values():
             # filter out anything but service artifacts
             if artifact_view.type == "ServiceArtifact":

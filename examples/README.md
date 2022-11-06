@@ -22,23 +22,31 @@ machine learning pipelines.
   hosted on a local Redis server to
   get started with [Feast](https://feast.dev/)
 
-## 📊 Data Visualizers
+## 📊 Data Validation
 
-Within ZenML, visualizers are Python classes that take post-execution view
-objects (e.g. `PipelineView`,
-`PipelineRunView`, `StepView`, etc.) and create visualizations for them.
+Testing your data for integrity problems and monitoring how its characteristics
+evolve and drift over time are best practices that are essential not only for
+developing highly accurate machine learning models, but also for keeping them
+from deteriorating after they are deployed in production. Data Validators
+enhance your pipelines with data quality testing and monitoring and allow you
+to visualize the results in the post-execution workflow.
 
-- **[facets_visualize_statistics](facets_visualize_statistics/README.md)**:
-  The [facets](https://pair-code.github.io/facets/) integration allows you to
-  retroactively go through pipeline runs and
-  analyze the statistics of the data artifacts.
-- **[whylogs_data_profiling](whylogs_data_profiling/README.md)**: Profile your
-  data using the
-  [whylogs](https://github.com/whylabs/whylogs) integration from within the
-  post-execution workflow.
+- **[deepchecks_data_validation](deepchecks_data_validation/README.md)**: Run
+  data integrity, data drift and model drift tests in your pipelines with our
+  [Deepchecks](https://github.com/deepchecks/deepchecks) integration.
 - **[evidently_drift_detection](evidently_drift_detection/README.md)**: Detect
   drift with our
   [Evidently](https://github.com/evidentlyai/evidently) integration.
+- **[great_expectations_data_validation](great_expectations_data_validation/README.md)**:
+  Validate your data with our
+  [Great Expectations](https://greatexpectations.io/) integration.
+- **[whylogs_data_profiling](whylogs_data_profiling/README.md)**: Profile your
+  data using the
+  [whylogs](https://github.com/whylabs/whylogs) integration.
+- **[facets_visualize_statistics](facets_visualize_statistics/README.md)**:
+  The [facets](https://pair-code.github.io/facets/) integration allows you to
+  retroactively go through pipeline runs and analyze the statistics of the data
+  artifacts.
 
 ## 🧪 Experiment Tracking
 
@@ -68,6 +76,10 @@ model.
   deployment to the next level
   with Seldon. This example gives you detailed instructions to help you deploy
   your model onto a Kubernetes cluster.
+- **[kserve_deployment](kserve_deployment/README.md)**: Take your model
+  deployment to the next level
+  with KServe. This example gives you detailed instructions to help you deploy
+  a Pytorch model onto a Kubernetes cluster with TorchServe.
 
 ## 🚅 Pipeline Orchestration
 
@@ -81,7 +93,7 @@ examples on how:
 
 - **[airflow_orchestration](airflow_orchestration/README.md)**: Running
   pipelines with Airflow locally.
-- **[kubeflow_pipeline_orchestration](kubeflow_pipeline_orchestration/README.md)**:
+- **[kubeflow_pipelines_orchestration](kubeflow_pipelines_orchestration/README.md)**:
   Shows how to orchestrate a pipeline
   using a local Kubeflow stack.
 
@@ -105,11 +117,10 @@ The need for a central place to manage credentials, keys and passwords cannot be
 understated. Our examples show you how to access your secrets within steps of 
 your pipeline.
 
-- **[aws_secret_manager](aws_secret_manager/README.md)** Access your secrets
+- **[aws_secret_manager](../docs/book/mlops-stacks/secrets-managers/aws.md)** Access your secrets
   manager from within a step using AWS's secrets manager.
-- *COMING SOON*: **[google_secret_manager](google_secret_manager/README.md)**
-  Access your secrets
-  manager from within a step using Google's secrets manager.
+- **[google_secret_manager](../docs/book/mlops-stacks/secrets-managers/gcp.md)**
+  Access your secrets manager from within a step using Google Cloud secrets manager.
 
 ## 🗿 Miscellaneous Tools
 
@@ -135,10 +146,13 @@ Some of our integrations don't really fit into a specific category.
 ## 🖥 Local Setup
 
 For some of these examples, ZenML provides a handy CLI command to pull them
-directly into your local environment. First install `zenml`:
+directly into your local environment. First install `zenml` and spin up the dashboard:
 
 ```shell
-pip install zenml
+pip install zenml[server]
+
+# Start the ZenServer to enable dashboard access
+zenml up
 ```
 
 Then you can view all the examples:

@@ -12,14 +12,11 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 
-from pipeline import (
-    TrainerConfig,
-    importer_mnist,
-    normalizer,
-    tf_evaluator,
-    tf_trainer,
-    wandb_example_pipeline,
-)
+from pipelines.training_pipeline.training_pipeline import wandb_example_pipeline
+from steps.evaluator.evaluator_step import tf_evaluator
+from steps.importer.importer_step import importer_mnist
+from steps.normalizer.normalizer_step import normalizer
+from steps.trainer.trainer_step import TrainerParameters, tf_trainer
 
 if __name__ == "__main__":
 
@@ -27,7 +24,7 @@ if __name__ == "__main__":
     run_1 = wandb_example_pipeline(
         importer=importer_mnist(),
         normalizer=normalizer(),
-        trainer=tf_trainer(config=TrainerConfig(epochs=5, lr=0.0003)),
+        trainer=tf_trainer(params=TrainerParameters(epochs=5, lr=0.0003)),
         evaluator=tf_evaluator(),
     )
 
@@ -37,7 +34,7 @@ if __name__ == "__main__":
     run_2 = wandb_example_pipeline(
         importer=importer_mnist(),
         normalizer=normalizer(),
-        trainer=tf_trainer(config=TrainerConfig(epochs=5, lr=0.0001)),
+        trainer=tf_trainer(params=TrainerParameters(epochs=5, lr=0.0001)),
         evaluator=tf_evaluator(),
     )
 

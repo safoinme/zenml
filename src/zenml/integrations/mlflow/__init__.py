@@ -11,16 +11,18 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Initialization for the ZenML MLflow integration.
+
+The MLflow integrations currently enables you to use MLflow tracking as a
+convenient way to visualize your experiment runs within the MLflow UI.
 """
-The mlflow integrations currently enables you to use mlflow tracking as a
-convenient way to visualize your experiment runs within the mlflow ui
-"""
-from typing import List
+from typing import List, Type
 
 from zenml.enums import StackComponentType
 from zenml.integrations.constants import MLFLOW
 from zenml.integrations.integration import Integration
-from zenml.zen_stores.models import FlavorWrapper
+from zenml.models import FlavorModel
+from zenml.stack import Flavor
 
 MLFLOW_MODEL_DEPLOYER_FLAVOR = "mlflow"
 MLFLOW_MODEL_EXPERIMENT_TRACKER_FLAVOR = "mlflow"
@@ -31,7 +33,7 @@ class MlflowIntegration(Integration):
 
     NAME = MLFLOW
     REQUIREMENTS = [
-        "mlflow>=1.2.0",
+        "mlflow>=1.2.0,<1.26.0",
         "mlserver>=0.5.3",
         "mlserver-mlflow>=0.5.3",
     ]
@@ -42,22 +44,18 @@ class MlflowIntegration(Integration):
         from zenml.integrations.mlflow import services  # noqa
 
     @classmethod
-    def flavors(cls) -> List[FlavorWrapper]:
-        """Declare the stack component flavors for the MLflow integration"""
-        return [
-            FlavorWrapper(
-                name=MLFLOW_MODEL_DEPLOYER_FLAVOR,
-                source="zenml.integrations.mlflow.model_deployers.MLFlowModelDeployer",
-                type=StackComponentType.MODEL_DEPLOYER,
-                integration=cls.NAME,
-            ),
-            FlavorWrapper(
-                name=MLFLOW_MODEL_EXPERIMENT_TRACKER_FLAVOR,
-                source="zenml.integrations.mlflow.experiment_trackers.MLFlowExperimentTracker",
-                type=StackComponentType.EXPERIMENT_TRACKER,
-                integration=cls.NAME,
-            ),
-        ]
+    def flavors(cls) -> List[Type[Flavor]]:
+        """Declare the stack component flavors for the MLflow integration.
+
+        Returns:
+            List of stack component flavors for this integration.
+        """
+        from zenml.integrations.mlflow.flavors import (
+            MLFlowExperimentTrackerFlavor,
+            MLFlowModelDeployerFlavor,
+        )
+
+        return [MLFlowModelDeployerFlavor, MLFlowExperimentTrackerFlavor]
 
 
 MlflowIntegration.check_installation()

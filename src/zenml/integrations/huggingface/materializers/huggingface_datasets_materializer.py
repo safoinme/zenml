@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Implementation of the Huggingface datasets materializer."""
 
 import os
 from tempfile import TemporaryDirectory
@@ -20,8 +21,8 @@ from datasets import Dataset, load_from_disk  # type: ignore[attr-defined]
 from datasets.dataset_dict import DatasetDict
 
 from zenml.artifacts import DataArtifact
-from zenml.io import utils as fileio_utils
 from zenml.materializers.base_materializer import BaseMaterializer
+from zenml.utils import io_utils
 
 DEFAULT_DATASET_DIR = "hf_datasets"
 
@@ -33,21 +34,32 @@ class HFDatasetMaterializer(BaseMaterializer):
     ASSOCIATED_ARTIFACT_TYPES = (DataArtifact,)
 
     def handle_input(self, data_type: Type[Any]) -> Dataset:
-        """Reads Dataset"""
-        super().handle_input(data_type)
+        """Reads Dataset.
 
-        return load_from_disk(
-            os.path.join(self.artifact.uri, DEFAULT_DATASET_DIR)
+        Args:
+            data_type: The type of the dataset to read.
+
+        Returns:
+            The dataset read from the specified dir.
+        """
+        super().handle_input(data_type)
+        temp_dir = TemporaryDirectory()
+        io_utils.copy_dir(
+            os.path.join(self.artifact.uri, DEFAULT_DATASET_DIR),
+            temp_dir.name,
         )
+        return load_from_disk(temp_dir.name)
 
     def handle_return(self, ds: Type[Any]) -> None:
         """Writes a Dataset to the specified dir.
+
         Args:
-            Dataset: The Dataset to write.
+            ds: The Dataset to write.
         """
         super().handle_return(ds)
-        temp_dir = TemporaryDirectory()
-        ds.save_to_disk(temp_dir.name)
-        fileio_utils.copy_dir(
-            temp_dir.name, os.path.join(self.artifact.uri, DEFAULT_DATASET_DIR)
-        )
+        with TemporaryDirectory() as temp_dir:
+            ds.save_to_disk(temp_dir)
+            io_utils.copy_dir(
+                temp_dir,
+                os.path.join(self.artifact.uri, DEFAULT_DATASET_DIR),
+            )

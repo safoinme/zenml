@@ -11,8 +11,10 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Class for all ZenML data analysis artifacts."""
 
 from zenml.artifacts.base_artifact import BaseArtifact
+from zenml.enums import ArtifactType
 
 
 class DataAnalysisArtifact(BaseArtifact):
@@ -23,4 +25,4 @@ class DataAnalysisArtifact(BaseArtifact):
     detection etc.
     """
 
-    TYPE_NAME = "DataAnalysisArtifact"
+    TYPE_NAME = ArtifactType.DATAANALYSIS

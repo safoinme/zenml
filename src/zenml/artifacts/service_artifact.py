@@ -11,11 +11,14 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Class for all ZenML service artifacts."""
+
 
 from zenml.artifacts.base_artifact import BaseArtifact
+from zenml.enums import ArtifactType
 
 
 class ServiceArtifact(BaseArtifact):
     """Class for all ZenML service artifacts."""
 
-    TYPE_NAME = "ServiceArtifact"
+    TYPE_NAME = ArtifactType.SERVICE

@@ -11,16 +11,37 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-from typing import ClassVar
+"""Implementation of the GitHub Container Registry."""
+
 
 from zenml.container_registries.base_container_registry import (
-    BaseContainerRegistry,
+    BaseContainerRegistryConfig,
+    BaseContainerRegistryFlavor,
 )
 from zenml.enums import ContainerRegistryFlavor
 
 
-class GitHubContainerRegistry(BaseContainerRegistry):
+class GitHubContainerRegistryConfig(BaseContainerRegistryConfig):
+    """Configuration for the GitHub Container Registry.
+
+    Attributes:
+        automatic_token_authentication: If `True`, use automatic token
+            authentication (https://docs.github.com/en/actions/security-guides/automatic-token-authentication#using-the-github_token-in-a-workflow)
+            when trying to access this container registry from within a GitHub
+            Actions environment.
+    """
+
+    automatic_token_authentication: bool = False
+
+
+class GitHubContainerRegistryFlavor(BaseContainerRegistryFlavor):
     """Class for GitHub Container Registry."""
 
-    # Class Configuration
-    FLAVOR: ClassVar[str] = ContainerRegistryFlavor.GITHUB.value
+    @property
+    def name(self) -> str:
+        """Name of the flavor.
+
+        Returns:
+            The name of the flavor.
+        """
+        return ContainerRegistryFlavor.GITHUB

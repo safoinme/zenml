@@ -11,23 +11,37 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Implementation of the Seldon Model Deployer."""
 
 import re
 from datetime import datetime
-from typing import ClassVar, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Dict, List, Optional, Type, cast
 from uuid import UUID
 
-from zenml.integrations.seldon import SELDON_MODEL_DEPLOYER_FLAVOR
+from zenml.client import Client
+from zenml.integrations.seldon.constants import (
+    SELDON_CUSTOM_DEPLOYMENT,
+    SELDON_DOCKER_IMAGE_KEY,
+)
+from zenml.integrations.seldon.flavors.seldon_model_deployer_flavor import (
+    SeldonModelDeployerConfig,
+    SeldonModelDeployerFlavor,
+)
 from zenml.integrations.seldon.seldon_client import SeldonClient
 from zenml.integrations.seldon.services.seldon_deployment import (
     SeldonDeploymentConfig,
     SeldonDeploymentService,
 )
 from zenml.logger import get_logger
-from zenml.model_deployers.base_model_deployer import BaseModelDeployer
-from zenml.repository import Repository
+from zenml.model_deployers import BaseModelDeployer, BaseModelDeployerFlavor
 from zenml.secrets_managers import BaseSecretsManager
 from zenml.services.service import BaseService, ServiceConfig
+from zenml.stack.stack import Stack
+from zenml.utils.analytics_utils import AnalyticsEvent, track_event
+from zenml.utils.pipeline_docker_image_builder import PipelineDockerImageBuilder
+
+if TYPE_CHECKING:
+    from zenml.config.pipeline_deployment import PipelineDeployment
 
 logger = get_logger(__name__)
 
@@ -35,51 +49,34 @@ DEFAULT_SELDON_DEPLOYMENT_START_STOP_TIMEOUT = 300
 
 
 class SeldonModelDeployer(BaseModelDeployer):
-    """Seldon Core model deployer stack component implementation.
+    """Seldon Core model deployer stack component implementation."""
 
-    Attributes:
-        kubernetes_context: the Kubernetes context to use to contact the remote
-            Seldon Core installation. If not specified, the current
-            configuration is used. Depending on where the Seldon model deployer
-            is being used, this can be either a locally active context or an
-            in-cluster Kubernetes configuration (if running inside a pod).
-        kubernetes_namespace: the Kubernetes namespace where the Seldon Core
-            deployment servers are provisioned and managed by ZenML. If not
-            specified, the namespace set in the current configuration is used.
-            Depending on where the Seldon model deployer is being used, this can
-            be either the current namespace configured in the locally active
-            context or the namespace in the context of which the pod is running
-            (if running inside a pod).
-        base_url: the base URL of the Kubernetes ingress used to expose the
-            Seldon Core deployment servers.
-        secret: the name of a ZenML secret containing the credentials used by
-            Seldon Core storage initializers to authenticate to the Artifact
-            Store (i.e. the storage backend where models are stored - see
-            https://docs.seldon.io/projects/seldon-core/en/latest/servers/overview.html#handling-credentials).
-    """
+    NAME: ClassVar[str] = "Seldon Core"
+    FLAVOR: ClassVar[Type[BaseModelDeployerFlavor]] = SeldonModelDeployerFlavor
 
-    # Class Configuration
-    FLAVOR: ClassVar[str] = SELDON_MODEL_DEPLOYER_FLAVOR
-
-    kubernetes_context: Optional[str]
-    kubernetes_namespace: Optional[str]
-    base_url: str
-    secret: Optional[str]
-
-    # private attributes
     _client: Optional[SeldonClient] = None
+
+    @property
+    def config(self) -> SeldonModelDeployerConfig:
+        """Returns the `SeldonModelDeployerConfig` config.
+
+        Returns:
+            The configuration.
+        """
+        return cast(SeldonModelDeployerConfig, self._config)
 
     @staticmethod
     def get_model_server_info(  # type: ignore[override]
         service_instance: "SeldonDeploymentService",
     ) -> Dict[str, Optional[str]]:
-        """ "Return implementation specific information that might be relevant
-        to the user.
+        """Return implementation specific information that might be relevant to the user.
 
         Args:
             service_instance: Instance of a SeldonDeploymentService
-        """
 
+        Returns:
+            Model server information.
+        """
         return {
             "PREDICTION_URL": service_instance.prediction_url,
             "MODEL_URI": service_instance.config.model_uri,
@@ -87,49 +84,17 @@ class SeldonModelDeployer(BaseModelDeployer):
             "SELDON_DEPLOYMENT": service_instance.seldon_deployment_name,
         }
 
-    @staticmethod
-    def get_active_model_deployer() -> "SeldonModelDeployer":
-        """Get the Seldon Core model deployer registered in the active stack.
-
-        Returns:
-            The Seldon Core model deployer registered in the active stack.
-        Raises:
-            TypeError: if the Seldon Core model deployer is not available.
-        """
-        model_deployer = Repository(  # type: ignore [call-arg]
-            skip_repository_check=True
-        ).active_stack.model_deployer
-        if not model_deployer or not isinstance(
-            model_deployer, SeldonModelDeployer
-        ):
-            raise TypeError(
-                f"The active stack needs to have a Seldon Core model deployer "
-                f"component registered to be able to deploy models with Seldon "
-                f"Core. You can create a new stack with a Seldon Core model "
-                f"deployer component or update your existing stack to add this "
-                f"component, e.g.:\n\n"
-                f"  'zenml model-deployer register seldon --flavor={SELDON_MODEL_DEPLOYER_FLAVOR} "
-                f"--kubernetes_context=context-name --kubernetes_namespace="
-                f"namespace-name --base_url=https://ingress.cluster.kubernetes'\n"
-                f"  'zenml stack create stack-name -d seldon ...'\n"
-            )
-        return model_deployer
-
     @property
     def seldon_client(self) -> SeldonClient:
         """Get the Seldon Core client associated with this model deployer.
 
         Returns:
             The Seldon Core client.
-
-        Raises:
-            SeldonClientError: if the Kubernetes client configuration cannot be
-                found.
         """
         if not self._client:
             self._client = SeldonClient(
-                context=self.kubernetes_context,
-                namespace=self.kubernetes_namespace,
+                context=self.config.kubernetes_context,
+                namespace=self.config.kubernetes_namespace,
             )
         return self._client
 
@@ -146,33 +111,59 @@ class SeldonModelDeployer(BaseModelDeployer):
             The Seldon Core Kubernetes secret name, or None if no secret is
             configured.
         """
-        if not self.secret:
+        if not self.config.secret:
             return None
         return (
-            re.sub(r"[^0-9a-zA-Z-]+", "-", f"zenml-seldon-core-{self.secret}")
+            re.sub(
+                r"[^0-9a-zA-Z-]+",
+                "-",
+                f"zenml-seldon-core-{self.config.secret}",
+            )
             .strip("-")
             .lower()
         )
 
+    def prepare_pipeline_deployment(
+        self,
+        deployment: "PipelineDeployment",
+        stack: "Stack",
+    ) -> None:
+        """Build a Docker image and push it to the container registry.
+
+        Args:
+            deployment: The pipeline deployment configuration.
+            stack: The stack on which the pipeline will be deployed.
+        """
+        needs_docker_image = False
+        for step in deployment.steps.values():
+            if step.config.extra.get(SELDON_CUSTOM_DEPLOYMENT, False) is True:
+                needs_docker_image = True
+
+        if needs_docker_image:
+            docker_image_builder = PipelineDockerImageBuilder()
+            repo_digest = docker_image_builder.build_and_push_docker_image(
+                deployment=deployment, stack=stack
+            )
+            deployment.add_extra(SELDON_DOCKER_IMAGE_KEY, repo_digest)
+
     def _create_or_update_kubernetes_secret(self) -> Optional[str]:
-        """Create or update a Kubernetes secret with the information stored in
-        the ZenML secret configured for the model deployer.
+        """Create or update a Kubernetes secret.
+
+        Uses the information stored in the ZenML secret configured for the model deployer.
 
         Returns:
             The name of the Kubernetes secret that was created or updated, or
             None if no secret was configured.
 
         Raises:
-            SeldonClientError: if the secret cannot be created or updated.
+            RuntimeError: if the secret cannot be created or updated.
         """
         # if a ZenML secret was configured in the model deployer,
         # create a Kubernetes secret as a means to pass this information
         # to the Seldon Core deployment
-        if self.secret:
+        if self.config.secret:
 
-            secret_manager = Repository(  # type: ignore [call-arg]
-                skip_repository_check=True
-            ).active_stack.secrets_manager
+            secret_manager = Client().active_stack.secrets_manager
 
             if not secret_manager or not isinstance(
                 secret_manager, BaseSecretsManager
@@ -180,14 +171,14 @@ class SeldonModelDeployer(BaseModelDeployer):
                 raise RuntimeError(
                     f"The active stack doesn't have a secret manager component. "
                     f"The ZenML secret specified in the Seldon Core Model "
-                    f"Deployer configuration cannot be fetched: {self.secret}."
+                    f"Deployer configuration cannot be fetched: {self.config.secret}."
                 )
 
             try:
-                zenml_secret = secret_manager.get_secret(self.secret)
+                zenml_secret = secret_manager.get_secret(self.config.secret)
             except KeyError:
                 raise RuntimeError(
-                    f"The ZenML secret '{self.secret}' specified in the "
+                    f"The ZenML secret '{self.config.secret}' specified in the "
                     f"Seldon Core Model Deployer configuration was not found "
                     f"in the active stack's secret manager."
                 )
@@ -201,11 +192,9 @@ class SeldonModelDeployer(BaseModelDeployer):
         return self.kubernetes_secret_name
 
     def _delete_kubernetes_secret(self) -> None:
-        """Delete the Kubernetes secret associated with this model deployer
-        if no Seldon Core deployments are using it.
+        """Delete the Kubernetes secret associated with this model deployer.
 
-        Raises:
-            SeldonClientError: if the secret cannot be deleted.
+        Do this if no Seldon Core deployments are using it.
         """
         if self.kubernetes_secret_name:
 
@@ -224,8 +213,11 @@ class SeldonModelDeployer(BaseModelDeployer):
         replace: bool = False,
         timeout: int = DEFAULT_SELDON_DEPLOYMENT_START_STOP_TIMEOUT,
     ) -> BaseService:
-        """Create a new Seldon Core deployment or update an existing one to
-        serve the supplied model and deployment configuration.
+        """Create a new Seldon Core deployment or update an existing one.
+
+        # noqa: DAR402
+
+        This should serve the supplied model and deployment configuration.
 
         This method has two modes of operation, depending on the `replace`
         argument value:
@@ -321,6 +313,21 @@ class SeldonModelDeployer(BaseModelDeployer):
         # start the service which in turn provisions the Seldon Core
         # deployment server and waits for it to reach a ready state
         service.start(timeout=timeout)
+
+        # Add telemetry with metadata that gets the stack metadata and
+        # differentiates between pure model and custom code deployments
+        stack = Client().active_stack
+        stack_metadata = {
+            component_type.value: component.flavor
+            for component_type, component in stack.components.items()
+        }
+        metadata = {
+            "store_type": Client().zen_store.type.value,
+            **stack_metadata,
+            "is_custom_code_deployment": config.is_custom_deployment,
+        }
+        track_event(AnalyticsEvent.MODEL_DEPLOYED, metadata=metadata)
+
         return service
 
     def find_model_server(
@@ -334,8 +341,7 @@ class SeldonModelDeployer(BaseModelDeployer):
         model_uri: Optional[str] = None,
         model_type: Optional[str] = None,
     ) -> List[BaseService]:
-        """Find one or more Seldon Core model services that match th given
-        criteria.
+        """Find one or more Seldon Core model services that match the given criteria.
 
         The Seldon Core deployment services that meet the search criteria are
         returned sorted in descending order of their creation time (i.e. more
@@ -414,6 +420,10 @@ class SeldonModelDeployer(BaseModelDeployer):
             uuid: UUID of the model server to stop.
             timeout: timeout in seconds to wait for the service to stop.
             force: if True, force the service to stop.
+
+        Raises:
+            NotImplementedError: stopping Seldon Core model servers is not
+                supported.
         """
         raise NotImplementedError(
             "Stopping Seldon Core model servers is not implemented. Try "
@@ -433,6 +443,10 @@ class SeldonModelDeployer(BaseModelDeployer):
                 active. . If set to 0, the method will return immediately after
                 provisioning the service, without waiting for it to become
                 active.
+
+        Raises:
+            NotImplementedError: since we don't support starting Seldon Core
+                model servers
         """
         raise NotImplementedError(
             "Starting Seldon Core model servers is not implemented"

@@ -11,11 +11,10 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-from typing import Dict
 
-from zenml.enums import ExecutionStatus, StackComponentType
-from zenml.repository import Repository
-from zenml.stack import Stack
+from zenml.client import Client
+from zenml.enums import ExecutionStatus
+from zenml.post_execution import get_pipeline
 
 
 def generate_basic_validation_function(
@@ -35,9 +34,9 @@ def generate_basic_validation_function(
         AssertionError: If the validation failed.
     """
 
-    def _validation_function(repository: Repository):
-        """Basic validation of pipeline runs inside the metadata store."""
-        pipeline = repository.get_pipeline(pipeline_name)
+    def _validation_function():
+        """Basic validation of pipeline runs."""
+        pipeline = get_pipeline(pipeline_name)
         assert pipeline
 
         for run in pipeline.runs[-run_count:]:
@@ -47,9 +46,9 @@ def generate_basic_validation_function(
     return _validation_function
 
 
-def caching_example_validation(repository: Repository):
-    """Validates the metadata store after running the caching example."""
-    pipeline = repository.get_pipeline("mnist_pipeline")
+def caching_example_validation():
+    """Validates the stored pipeline run info after running the caching example."""
+    pipeline = get_pipeline("mnist_pipeline")
     assert pipeline
 
     first_run, second_run = pipeline.runs[-2:]
@@ -69,10 +68,12 @@ def caching_example_validation(repository: Repository):
     assert not second_run.steps[3].is_cached
 
 
-def drift_detection_example_validation(repository: Repository):
-    """Validates the metadata store after running the drift detection
+def drift_detection_example_validation():
+    """Validates the stored pipeline run info after running the drift detection
     example."""
-    pipeline = repository.get_pipeline("drift_detection_pipeline")
+    from evidently.model_profile import Profile  # type: ignore[import]
+
+    pipeline = get_pipeline("drift_detection_pipeline")
     assert pipeline
 
     run = pipeline.runs[-1]
@@ -81,34 +82,13 @@ def drift_detection_example_validation(repository: Repository):
     # Final step should have output a data drift report
     drift_detection_step = run.get_step("drift_detector")
     output = drift_detection_step.outputs["profile"].read()
-    assert isinstance(output, Dict)
-    assert output.get("data_drift") is not None
+    assert isinstance(output, Profile)
 
 
-def mlflow_tracking_setup(repository: Repository) -> None:
-    """Adds an MLflow experiment tracking component to the active stack."""
-    # install the mlflow integration so we can import the stack component
-    import subprocess
-
-    subprocess.check_call(["zenml", "integration", "install", "mlflow", "-y"])
-
-    from zenml.integrations.mlflow.experiment_trackers import (
-        MLFlowExperimentTracker,
-    )
-
-    components = repository.active_stack.components
-    components[StackComponentType.EXPERIMENT_TRACKER] = MLFlowExperimentTracker(
-        name="mlflow_tracker"
-    )
-    stack = Stack.from_components(name="mlflow_stack", components=components)
-    repository.register_stack(stack)
-    repository.activate_stack(stack.name)
-
-
-def mlflow_tracking_example_validation(repository: Repository):
-    """Validates the metadata store after running the mlflow tracking
+def mlflow_tracking_example_validation():
+    """Validates the stored pipeline run info after running the mlflow tracking
     example."""
-    pipeline = repository.get_pipeline("mlflow_example_pipeline")
+    pipeline = get_pipeline("mlflow_example_pipeline")
     assert pipeline
 
     first_run, second_run = pipeline.runs[-2:]
@@ -123,7 +103,16 @@ def mlflow_tracking_example_validation(repository: Repository):
         MLFlowExperimentTracker,
     )
 
-    experiment_tracker = repository.active_stack.experiment_tracker
+    # activate the stack set up and used by the example
+    client = Client()
+    stack = client.zen_store.list_stacks(
+        project_name_or_id=client.active_project_name,
+        user_name_or_id=client.active_user.id,
+        name="mlflow_stack",
+    )
+    assert len(stack) == 1
+    client.activate_stack(stack[0])
+    experiment_tracker = Client().active_stack.experiment_tracker
     assert isinstance(experiment_tracker, MLFlowExperimentTracker)
     experiment_tracker.configure_mlflow()
 
@@ -165,17 +154,15 @@ def mlflow_tracking_example_validation(repository: Repository):
     assert len(artifacts) == 3
 
 
-def mlflow_deployment_example_validation(repository: Repository):
-    """Validates the metadata store after running the MLflow deployment
+def mlflow_deployment_example_validation():
+    """Validates the stored pipeline run info after running the MLflow deployment
     example."""
 
     # Verify the example run was successful
-    deployment_pipeline = repository.get_pipeline(
-        "continuous_deployment_pipeline"
-    )
+    deployment_pipeline = get_pipeline("continuous_deployment_pipeline")
     assert deployment_pipeline is not None
 
-    inference_pipeline = repository.get_pipeline("inference_pipeline")
+    inference_pipeline = get_pipeline("inference_pipeline")
     assert inference_pipeline is not None
 
     deployment_run = deployment_pipeline.runs[-1]
@@ -238,15 +225,15 @@ def mlflow_deployment_example_validation(repository: Repository):
     assert service.is_stopped
 
 
-def whylogs_example_validation(repository: Repository):
-    """Validates the metadata store after running the whylogs example."""
-    pipeline = repository.get_pipeline("data_profiling_pipeline")
+def whylogs_example_validation():
+    """Validates the stored pipeline run info after running the whylogs example."""
+    pipeline = get_pipeline("data_profiling_pipeline")
     assert pipeline
 
     run = pipeline.runs[-1]
     assert run.status == ExecutionStatus.COMPLETED
 
-    from whylogs import DatasetProfile
+    from whylogs.core import DatasetProfileView  # type: ignore
 
     profiles = [
         run.get_step("data_loader").outputs["profile"].read(),
@@ -255,4 +242,4 @@ def whylogs_example_validation(repository: Repository):
     ]
 
     for profile in profiles:
-        assert isinstance(profile, DatasetProfile)
+        assert isinstance(profile, DatasetProfileView)

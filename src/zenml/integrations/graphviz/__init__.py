@@ -11,6 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
+"""Initialization of the Graphviz integration."""
+
 from zenml.integrations.constants import GRAPHVIZ
 from zenml.integrations.integration import Integration
 
@@ -20,7 +22,6 @@ class GraphvizIntegration(Integration):
 
     NAME = GRAPHVIZ
     REQUIREMENTS = ["graphviz>=0.17"]
-    SYSTEM_REQUIREMENTS = {"graphviz": "dot"}
 
 
 GraphvizIntegration.check_installation()

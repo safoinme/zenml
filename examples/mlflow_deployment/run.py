@@ -14,31 +14,33 @@
 from typing import cast
 
 import click
-from pipeline import (
-    DeploymentTriggerConfig,
-    MLFlowDeploymentLoaderStepConfig,
-    TrainerConfig,
-    continuous_deployment_pipeline,
-    deployment_trigger,
-    dynamic_importer,
-    importer_mnist,
-    inference_pipeline,
-    model_deployer,
-    normalizer,
-    prediction_service_loader,
-    predictor,
-    tf_evaluator,
-    tf_predict_preprocessor,
-    tf_trainer,
-)
+from pipelines import continuous_deployment_pipeline, inference_pipeline
 from rich import print
+from steps.deployment_trigger.deployment_trigger_step import (
+    DeploymentTriggerParameters,
+    deployment_trigger,
+)
+from steps.dynamic_importer.dynamic_importer_step import dynamic_importer
+from steps.importer.importer_step import importer_mnist
+from steps.normalizer.normalizer_step import normalizer
+from steps.prediction_service_loader.prediction_service_loader_step import (
+    MLFlowDeploymentLoaderStepParameters,
+    model_deployer,
+    prediction_service_loader,
+)
+from steps.predictor.predictor_step import predictor
+from steps.tf_evaluator.tf_evaluator_step import tf_evaluator
+from steps.tf_predict_preprocessor.tf_predict_preprocessor_step import (
+    tf_predict_preprocessor,
+)
+from steps.tf_trainer.tf_trainer_step import TrainerParameters, tf_trainer
 
 from zenml.integrations.mlflow.mlflow_utils import get_tracking_uri
 from zenml.integrations.mlflow.model_deployers.mlflow_model_deployer import (
     MLFlowModelDeployer,
 )
 from zenml.integrations.mlflow.services import MLFlowDeploymentService
-from zenml.integrations.mlflow.steps import MLFlowDeployerConfig
+from zenml.integrations.mlflow.steps import MLFlowDeployerParameters
 
 DEPLOY = "deploy"
 PREDICT = "predict"
@@ -79,15 +81,15 @@ def main(config: str, epochs: int, lr: float, min_accuracy: float):
         deployment = continuous_deployment_pipeline(
             importer=importer_mnist(),
             normalizer=normalizer(),
-            trainer=tf_trainer(config=TrainerConfig(epochs=epochs, lr=lr)),
+            trainer=tf_trainer(params=TrainerParameters(epochs=epochs, lr=lr)),
             evaluator=tf_evaluator(),
             deployment_trigger=deployment_trigger(
-                config=DeploymentTriggerConfig(
+                params=DeploymentTriggerParameters(
                     min_accuracy=min_accuracy,
                 )
             ),
             model_deployer=model_deployer(
-                config=MLFlowDeployerConfig(workers=3, timeout=10)
+                params=MLFlowDeployerParameters(workers=3, timeout=10)
             ),
         )
 
@@ -99,7 +101,7 @@ def main(config: str, epochs: int, lr: float, min_accuracy: float):
             dynamic_importer=dynamic_importer(),
             predict_preprocessor=tf_predict_preprocessor(),
             prediction_service_loader=prediction_service_loader(
-                MLFlowDeploymentLoaderStepConfig(
+                MLFlowDeploymentLoaderStepParameters(
                     pipeline_name="continuous_deployment_pipeline",
                     pipeline_step_name="mlflow_model_deployer_step",
                     running=False,
@@ -134,7 +136,7 @@ def main(config: str, epochs: int, lr: float, min_accuracy: float):
                 f"process service and accepts inference requests at:\n"
                 f"    {service.prediction_url}\n"
                 f"To stop the service, run "
-                f"[italic green]`zenml served-models delete "
+                f"[italic green]`zenml model-deployer models delete "
                 f"{str(service.uuid)}`[/italic green]."
             )
         elif service.is_failed:

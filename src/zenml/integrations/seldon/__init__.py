@@ -11,16 +11,18 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""
+"""Initialization of the Seldon integration.
+
 The Seldon Core integration allows you to use the Seldon Core model serving
 platform to implement continuous model deployment.
 """
-from typing import List
+from typing import List, Type
 
 from zenml.enums import StackComponentType
 from zenml.integrations.constants import SELDON
 from zenml.integrations.integration import Integration
-from zenml.zen_stores.models import FlavorWrapper
+from zenml.models import FlavorModel
+from zenml.stack import Flavor
 
 SELDON_MODEL_DEPLOYER_FLAVOR = "seldon"
 
@@ -31,6 +33,7 @@ class SeldonIntegration(Integration):
     NAME = SELDON
     REQUIREMENTS = [
         "kubernetes==18.20.0",
+        "seldon-core==1.14.1",
     ]
 
     @classmethod
@@ -40,16 +43,15 @@ class SeldonIntegration(Integration):
         from zenml.integrations.seldon import services  # noqa
 
     @classmethod
-    def flavors(cls) -> List[FlavorWrapper]:
-        """Declare the stack component flavors for the Seldon Core."""
-        return [
-            FlavorWrapper(
-                name=SELDON_MODEL_DEPLOYER_FLAVOR,
-                source="zenml.integrations.seldon.model_deployers.SeldonModelDeployer",
-                type=StackComponentType.MODEL_DEPLOYER,
-                integration=cls.NAME,
-            )
-        ]
+    def flavors(cls) -> List[Type[Flavor]]:
+        """Declare the stack component flavors for the Seldon Core.
+
+        Returns:
+            List of stack component flavors for this integration.
+        """
+        from zenml.integrations.seldon.flavors import SeldonModelDeployerFlavor
+
+        return [SeldonModelDeployerFlavor]
 
 
 SeldonIntegration.check_installation()
