@@ -62,8 +62,7 @@ prerequisites:
 command line argument. This Kubernetes context needs to point to the Kubernetes
 cluster where KServe model servers will be deployed. If the context is not
 explicitly supplied to the example, it defaults to using the locally active
-context. You can find more information about setup and usage of the Kubernetes
-cluster in the [ZenML Cloud Guide](../../stack-deployment-guide/overview.md)
+context.
 
 2. KServe needs to be preinstalled and running in the target Kubernetes
 cluster. Check out the [KServe Serverless installation Guide](https://kserve.github.io/website/0.9/admin/serverless/).
@@ -158,20 +157,30 @@ $ zenml secrets-manager secret get kserve_secret
 ```
 
 For more information and a full list of configurable attributes of the KServe 
-secret schemas, check out the [API Docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-kserve/#zenml.integrations.kserve.secret_schemas).
+secret schemas, check out the [API Docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-kserve/#zenml.integrations.kserve.secret_schemas).
 
 ## How do you use it?
 
-We can register the model deployer and use it in our active stack:
+For registering the model deployer, we need the URL of the Istio Ingress Gateway deployed on the Kubernetes cluster. We can get this URL by running the following command (assuming that the service name is `istio-ingressgateway`, deployed in the `istio-system` namespace):
+
+```bash
+# For GKE clusters, the host is the GKE cluster IP address.
+export INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+# For EKS clusters, the host is the EKS cluster IP hostname.
+export INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+```
+Now register the model deployer:
 
 ```bash
 zenml model-deployer register kserve_gke --flavor=kserve \
   --kubernetes_context=gke_zenml-core_us-east1-b_zenml-test-cluster \ 
   --kubernetes_namespace=zenml-workloads \
-  --base_url=$INGRESS_URL \
+  --base_url=$INGRESS_HOST \
   --secret=kserve_secret
+```
 
-# Now we can use the model deployer in our stack
+We can now use the model deployer in our stack.
+```
 zenml stack update kserve_stack --model-deployer=kserve_gke
 ```
 
@@ -218,17 +227,28 @@ pytorch_model_deployer = kserve_model_deployer_step(
 )
 ```
 
+Within the `KServeDeploymentConfig` you can configure:
+   * `model_name`: the name of the model in the KServe cluster and in ZenML.
+   * `replicas`: the number of replicas with which to deploy the model
+   * `predictor`: the type of predictor to use for the model. The
+    predictor type can be one of the following: `tensorflow`, `pytorch`, `sklearn`, `xgboost`, `custom`.
+   * `resources`: This can be configured by passing a dictionary with the
+    `requests` and `limits` keys. The values for these keys can be a dictionary
+    with the `cpu` and `memory` keys. The values for these keys can be a string
+    with the amount of CPU and memory to be allocated to the model.
+
+
 A concrete example of using the KServe Model Deployer can be found
 [here](https://github.com/zenml-io/zenml/tree/main/examples/kserve_deployment).
 
 For more information and a full list of configurable attributes of the KServe 
-Model Deployer, check out the [API Docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-kserve/#zenml.integrations.kserve.model_deployers).
+Model Deployer, check out the [API Docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-kserve/#zenml.integrations.kserve.model_deployers).
 
 {% hint style="info" %}
 The model deployment step are experimental good for standard use cases. 
 However, if you need to customize the deployment step, you can always create 
 your own model deployment step. Find more information about model deployment 
-steps in the [Model Deployment Steps](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-kserve/#zenml.integrations.kserve.steps) section.
+steps in the [Model Deployment Steps](https://apidocs.zenml.io/latest/integration_code_docs/integrations-kserve/#zenml.integrations.kserve.steps) section.
 {% endhint %}
 
 ## Custom Model Deployment
@@ -236,7 +256,7 @@ steps in the [Model Deployment Steps](https://apidocs.zenml.io/latest/api_docs/i
 While KServe is a good fit for most use cases with the built-in model servers, 
 it is not always the best fit for your custom model deployment use case. For
 that reason KServe allows you to create your own model server using the KServe 
-ModelServer API where you can customize the predict, the pre- and 
+`ModelServer` API where you can customize the predict, the pre- and 
 post-processing functions. With ZenML's KServe Integration, you can create 
 your own custom model deployment code by creating a custom predict function 
 that will be passed to a custom deployment step responsible for preparing a 

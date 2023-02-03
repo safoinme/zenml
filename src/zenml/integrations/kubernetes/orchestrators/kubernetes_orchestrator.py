@@ -56,7 +56,9 @@ from zenml.logger import get_logger
 from zenml.orchestrators import BaseOrchestrator
 from zenml.orchestrators.utils import get_orchestrator_run_name
 from zenml.stack import StackValidator
-from zenml.utils.pipeline_docker_image_builder import PipelineDockerImageBuilder
+from zenml.utils.pipeline_docker_image_builder import (
+    PipelineDockerImageBuilder,
+)
 
 if TYPE_CHECKING:
     from zenml.config.pipeline_deployment import PipelineDeployment
@@ -213,7 +215,10 @@ class KubernetesOrchestrator(BaseOrchestrator):
             return True, ""
 
         return StackValidator(
-            required_components={StackComponentType.CONTAINER_REGISTRY},
+            required_components={
+                StackComponentType.CONTAINER_REGISTRY,
+                StackComponentType.IMAGE_BUILDER,
+            },
             custom_validation_function=_validate_local_requirements,
         )
 
@@ -229,7 +234,7 @@ class KubernetesOrchestrator(BaseOrchestrator):
             stack: The stack on which the pipeline will be deployed.
         """
         docker_image_builder = PipelineDockerImageBuilder()
-        repo_digest = docker_image_builder.build_and_push_docker_image(
+        repo_digest = docker_image_builder.build_docker_image(
             deployment=deployment, stack=stack
         )
         deployment.add_extra(ORCHESTRATOR_DOCKER_IMAGE_KEY, repo_digest)
@@ -287,8 +292,7 @@ class KubernetesOrchestrator(BaseOrchestrator):
         )
 
         settings = cast(
-            Optional[KubernetesOrchestratorSettings],
-            self.get_settings(deployment),
+            KubernetesOrchestratorSettings, self.get_settings(deployment)
         )
 
         # Authorize pod to run Kubernetes commands inside the cluster.
@@ -347,13 +351,14 @@ class KubernetesOrchestrator(BaseOrchestrator):
         )
 
         # Wait for the orchestrator pod to finish and stream logs.
-        if self.config.synchronous:
+        if settings.synchronous:
             logger.info("Waiting for Kubernetes orchestrator pod...")
             kube_utils.wait_pod(
                 core_api=self._k8s_core_api,
                 pod_name=pod_name,
                 namespace=self.config.kubernetes_namespace,
                 exit_condition_lambda=kube_utils.pod_is_done,
+                timeout_sec=settings.timeout,
                 stream_logs=True,
             )
         else:

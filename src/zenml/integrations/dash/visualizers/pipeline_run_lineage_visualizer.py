@@ -132,13 +132,12 @@ class PipelineRunLineageVisualizer(BaseVisualizer):
         Returns:
             The Dash application.
         """
-        # flake8: noqa: C901
         external_stylesheets = [
             dbc.themes.BOOTSTRAP,
             dbc.icons.BOOTSTRAP,
         ]
         if magic:
-            if Environment.in_notebook:
+            if Environment.in_notebook():
                 # Only import jupyter_dash in this case
                 from jupyter_dash import JupyterDash  # noqa
 

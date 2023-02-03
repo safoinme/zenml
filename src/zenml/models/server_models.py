@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""Model definitions for code projects."""
+"""Model definitions for ZenML servers."""
 
 from uuid import UUID, uuid4
 
@@ -29,6 +29,7 @@ class ServerDeploymentType(StrEnum):
     AWS = "aws"
     GCP = "gcp"
     AZURE = "azure"
+    ALPHA = "alpha"
     OTHER = "other"
 
 

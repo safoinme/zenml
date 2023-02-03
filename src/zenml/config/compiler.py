@@ -16,24 +16,23 @@ import copy
 import string
 from typing import TYPE_CHECKING, Any, Dict, List, Sequence, Tuple
 
-import tfx.orchestration.pipeline as tfx_pipeline
-from google.protobuf import json_format
-from tfx.dsl.compiler.compiler import Compiler as TFXCompiler
-from tfx.proto.orchestration.pipeline_pb2 import Pipeline as Pb2Pipeline
-from tfx.proto.orchestration.pipeline_pb2 import PipelineNode
-
 from zenml.config.base_settings import BaseSettings, ConfigurationLevel
 from zenml.config.pipeline_configurations import PipelineRunConfiguration
 from zenml.config.pipeline_deployment import PipelineDeployment
 from zenml.config.settings_resolver import SettingsResolver
-from zenml.config.step_configurations import Step, StepConfiguration, StepSpec
+from zenml.config.step_configurations import (
+    Step,
+    StepConfiguration,
+    StepSpec,
+)
+from zenml.environment import get_run_environment_dict
 from zenml.exceptions import PipelineInterfaceError, StackValidationError
-from zenml.utils import source_utils, string_utils
+from zenml.utils import pydantic_utils, settings_utils, source_utils
 
 if TYPE_CHECKING:
     from zenml.pipelines import BasePipeline
+    from zenml.stack import Stack, StackComponent
     from zenml.steps import BaseStep
-    from zenml.stack import Stack
 
 from zenml.logger import get_logger
 
@@ -66,14 +65,12 @@ class Compiler:
         self._apply_run_configuration(
             pipeline=pipeline, config=run_configuration
         )
+        self._apply_stack_default_settings(pipeline=pipeline, stack=stack)
         self._verify_distinct_step_names(pipeline=pipeline)
         if run_configuration.run_name:
             self._verify_run_name(run_configuration.run_name)
 
         pipeline.connect(**pipeline.steps)
-        pb2_pipeline = self._compile_proto_pipeline(
-            pipeline=pipeline, stack=stack
-        )
 
         pipeline_settings = self._filter_and_validate_settings(
             settings=pipeline.configuration.settings,
@@ -95,9 +92,7 @@ class Compiler:
                 pipeline_extra=pipeline.configuration.extra,
                 stack=stack,
             )
-            for name, step in self._get_sorted_steps(
-                pb2_pipeline, steps=pipeline.steps
-            )
+            for name, step in self._get_sorted_steps(steps=pipeline.steps)
         }
 
         self._ensure_required_stack_components_exist(
@@ -108,17 +103,13 @@ class Compiler:
             pipeline_name=pipeline.name
         )
 
-        encoded_pb2_pipeline = string_utils.b64_encode(
-            json_format.MessageToJson(pb2_pipeline)
-        )
-
         deployment = PipelineDeployment(
             run_name=run_name,
             stack_id=stack.id,
             schedule=run_configuration.schedule,
             pipeline=pipeline.configuration,
-            proto_pipeline=encoded_pb2_pipeline,
             steps=steps,
+            client_environment=get_run_environment_dict(),
         )
         logger.debug("Compiled pipeline deployment: %s", deployment)
         return deployment
@@ -146,6 +137,63 @@ class Compiler:
             if step_name not in pipeline.steps:
                 raise KeyError(f"No step with name {step_name}.")
             pipeline.steps[step_name]._apply_configuration(step_config)
+
+        # Override `enable_cache` of all steps if set at run level
+        if config.enable_cache is not None:
+            for step_ in pipeline.steps.values():
+                step_.configure(enable_cache=config.enable_cache)
+
+    def _apply_stack_default_settings(
+        self, pipeline: "BasePipeline", stack: "Stack"
+    ) -> None:
+        """Applies stack default settings to a pipeline.
+
+        Args:
+            pipeline: The pipeline to which to apply the default settings.
+            stack: The stack containing potential default settings.
+        """
+        pipeline_settings = pipeline.configuration.settings
+
+        for component in stack.components.values():
+            if not component.settings_class:
+                continue
+
+            settings_key = settings_utils.get_stack_component_setting_key(
+                component
+            )
+            default_settings = self._get_default_settings(component)
+
+            if settings_key in pipeline_settings:
+                combined_settings = pydantic_utils.update_model(
+                    default_settings, update=pipeline_settings[settings_key]
+                )
+                pipeline_settings[settings_key] = combined_settings
+            else:
+                pipeline_settings[settings_key] = default_settings
+
+        pipeline.configure(settings=pipeline_settings, merge=False)
+
+    def _get_default_settings(
+        self,
+        stack_component: "StackComponent",
+    ) -> "BaseSettings":
+        """Gets default settings configured on a stack component.
+
+        Args:
+            stack_component: The stack component for which to get the settings.
+
+        Returns:
+            The settings configured on the stack component.
+        """
+        assert stack_component.settings_class
+        # Exclude additional config attributes that aren't part of the settings
+        field_names = set(stack_component.settings_class.__fields__)
+        default_settings = stack_component.settings_class.parse_obj(
+            stack_component.config.dict(
+                include=field_names, exclude_unset=True, exclude_defaults=True
+            )
+        )
+        return default_settings
 
     def _verify_distinct_step_names(self, pipeline: "BasePipeline") -> None:
         """Verifies that all steps inside the pipeline have separate names.
@@ -222,8 +270,10 @@ class Compiler:
                 settings_instance = resolver.resolve(stack=stack)
             except KeyError:
                 logger.info(
-                    "Not including stack component settings with key `%s`.", key
+                    "Not including stack component settings with key `%s`.",
+                    key,
                 )
+                continue
 
             if configuration_level not in settings_instance.LEVEL:
                 raise TypeError(
@@ -246,6 +296,7 @@ class Compiler:
         return StepSpec(
             source=source_utils.resolve_class(step.__class__),
             upstream_steps=sorted(step.upstream_steps),
+            inputs=step.inputs,
         )
 
     def _compile_step(
@@ -273,71 +324,18 @@ class Compiler:
             configuration_level=ConfigurationLevel.STEP,
             stack=stack,
         )
-
-        merged_settings = {
-            **pipeline_settings,
-            **step_settings,
-        }
-        merged_extras = {**pipeline_extra, **step.configuration.extra}
+        step_extra = step.configuration.extra
 
         step.configure(
-            settings=merged_settings,
-            extra=merged_extras,
-            merge=False,
+            settings=pipeline_settings, extra=pipeline_extra, merge=False
         )
+        step.configure(settings=step_settings, extra=step_extra, merge=True)
 
         complete_step_configuration = StepConfiguration(
-            docstring=step.__doc__, **step.configuration.dict()
+            **step.configuration.dict()
         )
 
         return Step(spec=step_spec, config=complete_step_configuration)
-
-    def _compile_proto_pipeline(
-        self, pipeline: "BasePipeline", stack: "Stack"
-    ) -> Pb2Pipeline:
-        """Compiles a ZenML pipeline into a TFX protobuf pipeline.
-
-        Args:
-            pipeline: The pipeline to compile.
-            stack: The stack on which the pipeline will run.
-
-        Raises:
-            KeyError: If any step of the pipeline contains an invalid upstream
-                step.
-
-        Returns:
-            The compiled proto pipeline.
-        """
-        # Connect the inputs/outputs of all steps in the pipeline
-        tfx_components = {
-            step.name: step.component for step in pipeline.steps.values()
-        }
-
-        # Add potential task dependencies that users specified
-        for step in pipeline.steps.values():
-            for upstream_step in step.upstream_steps:
-                try:
-                    upstream_node = tfx_components[upstream_step]
-                except KeyError:
-                    raise KeyError(
-                        f"Unable to find upstream step `{upstream_step}` for step "
-                        f"`{step.name}`. Available steps: {set(tfx_components)}."
-                    )
-
-                step.component.add_upstream_node(upstream_node)
-
-        artifact_store = stack.artifact_store
-
-        # We do not pass the metadata connection config here as it might not be
-        # accessible. Instead it is queried from the active stack right before a
-        # step is executed (see `BaseOrchestrator.run_step(...)`)
-        intermediate_tfx_pipeline = tfx_pipeline.Pipeline(
-            pipeline_name=pipeline.name,
-            components=list(tfx_components.values()),
-            pipeline_root=artifact_store.path,
-            enable_cache=pipeline.enable_cache,
-        )
-        return TFXCompiler().compile(intermediate_tfx_pipeline)
 
     @staticmethod
     def _get_default_run_name(pipeline_name: str) -> str:
@@ -353,28 +351,48 @@ class Compiler:
 
     @staticmethod
     def _get_sorted_steps(
-        pb2_pipeline: Pb2Pipeline, steps: Dict[str, "BaseStep"]
+        steps: Dict[str, "BaseStep"]
     ) -> List[Tuple[str, "BaseStep"]]:
-        """Sorts the steps of a pipeline.
+        """Sorts the steps of a pipeline using topological sort.
 
         The resulting list of steps will be in an order that can be executed
         sequentially without any conflicts.
 
         Args:
-            pb2_pipeline: Pipeline proto representation.
             steps: ZenML pipeline steps.
 
         Returns:
             The sorted steps.
         """
-        mapping = {
-            step.name: (name_in_pipeline, step)
+        from zenml.orchestrators.dag_runner import reverse_dag
+        from zenml.orchestrators.topsort import topsorted_layers
+
+        # Sort step names using topological sort
+        dag: Dict[str, List[str]] = {
+            step.name: list(step.upstream_steps) for step in steps.values()
+        }
+        reversed_dag: Dict[str, List[str]] = reverse_dag(dag)
+        layers = topsorted_layers(
+            nodes=[step.name for step in steps.values()],
+            get_node_id_fn=lambda node: node,
+            get_parent_nodes=lambda node: dag[node],
+            get_child_nodes=lambda node: reversed_dag[node],
+        )
+        sorted_step_names = [step for layer in layers for step in layer]
+
+        # Construct pipeline name to step mapping
+        step_name_to_name_in_pipeline: Dict[str, str] = {
+            step.name: name_in_pipeline
             for name_in_pipeline, step in steps.items()
         }
-        sorted_steps = []
-        for node in pb2_pipeline.nodes:
-            pipeline_node: PipelineNode = node.pipeline_node
-            sorted_steps.append(mapping[pipeline_node.node_info.id])
+        sorted_names_in_pipeline: List[str] = [
+            step_name_to_name_in_pipeline[step_name]
+            for step_name in sorted_step_names
+        ]
+        sorted_steps: List[Tuple[str, "BaseStep"]] = [
+            (name_in_pipeline, steps[name_in_pipeline])
+            for name_in_pipeline in sorted_names_in_pipeline
+        ]
         return sorted_steps
 
     @staticmethod

@@ -32,6 +32,13 @@ deploy models for real time inference use cases. With the model deployers and
 other stack components, you can build pipelines that are continuously trained 
 and deployed to a production.
 
+## How they experiment trackers slot into the stack
+
+Here is an architecture diagram that shows how model deployers fit into the 
+overall story of a remote stack. 
+
+![Experiment Tracker](../../assets/diagrams/Remote_with_exp_tracker.png)
+
 ### Model Deployers Flavors
 
 ZenML comes with a `local` MLflow model deployer which is a simple model 
@@ -42,6 +49,7 @@ provided by integrations:
 | Model Deployer                       | Flavor   | Integration   | Notes                                                                        |
 |--------------------------------------|----------|---------------|------------------------------------------------------------------------------|
 | [MLflow](./mlflow.md)                | `mlflow` | `mlflow`      | Deploys ML Model locally                                                     |
+| [BentoML](./bentoml.md)              | `bentoml`| `bentoml`     | Build and Deploy ML models locally or for production grade (Cloud, K8s)      |
 | [Seldon Core](./seldon.md)           | `seldon` | `seldon Core` | Built on top of Kubernetes to deploy models for production grade environment |
 | [KServe](./kserve.md)                | `kserve` | `kserve`      | Kubernetes based model deployment framework                                  |
 | [Custom Implementation](./custom.md) | _custom_ |               | Extend the Artifact Store abstraction and provide your own implementation    |
@@ -237,7 +245,7 @@ $ zenml model-deployer models describe 8cbe671b-9fce-4394-a051-68e001f92765
 ┠────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┨
 ┃ MODEL_NAME             │ mnist                                                                                  ┃
 ┠────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┨
-┃ MODEL_URI              │ s3://zenfiles/seldon_model_deployer_step/output/884/seldon                             ┃
+┃ MODEL_URI              │ s3://zenprojects/seldon_model_deployer_step/output/884/seldon                             ┃
 ┠────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┨
 ┃ PIPELINE_NAME          │ continuous_deployment_pipeline                                                         ┃
 ┠────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┨

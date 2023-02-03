@@ -128,17 +128,39 @@ This method requires you to include a [Secrets Manager](../secrets-managers/secr
 in your stack and configure a ZenML secret to store the MLflow tracking service
 credentials securely.
 
-{% hint style="warning" %}
-**This method is not yet supported!**
+You can register the secret using the `zenml secret register` command:
 
-We are actively working on adding Secrets Manager support to the MLflow
-Experiment Tracker.
+```shell 
+# Register a secret called `mlflow_secret` with key-value pairs for the
+# username and password to authenticate with the MLflow tracking server
+zenml secrets-manager secret register mlflow_secret \
+    --username=<USERNAME> \
+    --password=<PASSWORD>
+```
+
+Once the secret is registered, you can use it to configure the MLflow Experiment
+Tracker:
+
+```shell
+# Reference the username and password in our experiment tracker component
+zenml experiment-tracker register mlflow \
+    --flavor=mlflow \
+    --tracking_username={{mlflow_secret.username}} \
+    --tracking_password={{mlflow_secret.password}} \
+    ...
+```
+
+{% hint style="info" %}
+Read more about [Secrets Manager](../secrets-managers/secrets-managers.md) and
+[Secrets](../secrets-managers/secrets.md) in the ZenML documentation.
+For more practical examples of how to use the Secrets Manager, check out the
+[Secrets management practical guide](../../advanced-guide/practical/secrets-management.md).
 {% endhint %}
 {% endtab %}
 {% endtabs %}
 
 For more, up-to-date information on the MLflow Experiment Tracker implementation
-and its configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-mlflow/#zenml.integrations.mlflow.experiment_trackers.mlflow_experiment_tracker).
+and its configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-mlflow/#zenml.integrations.mlflow.experiment_trackers.mlflow_experiment_tracker).
 
 ## How do you use it?
 
@@ -173,8 +195,10 @@ def tf_trainer(
     return model
 ```
 
+### Additional configuration
+
 For additional configuration of the MLflow experiment tracker, you can pass
-`MLflowExperimentTrackerSettings` to create nested runs or add additional tags
+`MLFlowExperimentTrackerSettings` to create nested runs or add additional tags
 to your MLflow runs:
 
 ```python
@@ -197,6 +221,11 @@ def step_one(
 ) -> np.ndarray:
     ...
 ```
+
+Check out the
+[API docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-mlflow/#zenml.integrations.mlflow.flavors.mlflow_experiment_tracker_flavor.MLFlowExperimentTrackerSettings)
+for a full list of available attributes and [this docs page](../..//advanced-guide/pipelines/settings.md)
+for more information on how to specify settings.
 
 You can also check out our examples pages for working examples that use the
 MLflow Experiment Tracker in their stacks:

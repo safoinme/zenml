@@ -30,7 +30,7 @@ class AirflowIntegration(Integration):
     """Definition of Airflow Integration for ZenML."""
 
     NAME = AIRFLOW
-    REQUIREMENTS = ["apache-airflow==2.2.0"]
+    REQUIREMENTS = ["apache-airflow~=2.4.0"]
 
     @classmethod
     def flavors(cls) -> List[Type[Flavor]]:
@@ -39,7 +39,9 @@ class AirflowIntegration(Integration):
         Returns:
             List of stack component flavors for this integration.
         """
-        from zenml.integrations.airflow.flavors import AirflowOrchestratorFlavor
+        from zenml.integrations.airflow.flavors import (
+            AirflowOrchestratorFlavor,
+        )
 
         return [AirflowOrchestratorFlavor]
 

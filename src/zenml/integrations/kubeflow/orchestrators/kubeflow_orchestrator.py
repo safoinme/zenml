@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, cast
 from uuid import UUID
 
 import kfp
+import requests
 import urllib3
 from kfp import dsl
 from kfp.compiler import Compiler as KFPCompiler
@@ -50,6 +51,10 @@ from zenml.constants import (
     ENV_ZENML_LOCAL_STORES_PATH,
     ORCHESTRATOR_DOCKER_IMAGE_KEY,
 )
+from zenml.container_registries.base_container_registry import (
+    BaseContainerRegistry,
+)
+from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.enums import StackComponentType
 from zenml.environment import Environment
 from zenml.exceptions import ProvisioningError
@@ -58,14 +63,7 @@ from zenml.integrations.kubeflow.flavors.kubeflow_orchestrator_flavor import (
     KubeflowOrchestratorConfig,
     KubeflowOrchestratorSettings,
 )
-from zenml.integrations.kubeflow.orchestrators import (
-    local_deployment_utils,
-    utils,
-)
-from zenml.integrations.kubeflow.orchestrators.kubeflow_entrypoint_configuration import (
-    METADATA_UI_PATH_OPTION,
-    KubeflowEntrypointConfiguration,
-)
+from zenml.integrations.kubeflow.orchestrators import local_deployment_utils
 from zenml.integrations.kubeflow.orchestrators.local_deployment_utils import (
     KFP_VERSION,
 )
@@ -75,8 +73,11 @@ from zenml.logger import get_logger
 from zenml.orchestrators import BaseOrchestrator
 from zenml.orchestrators.utils import get_orchestrator_run_name
 from zenml.stack import StackValidator
+from zenml.stack.stack_component import StackComponent
 from zenml.utils import io_utils, networking_utils
-from zenml.utils.pipeline_docker_image_builder import PipelineDockerImageBuilder
+from zenml.utils.pipeline_docker_image_builder import (
+    PipelineDockerImageBuilder,
+)
 
 if TYPE_CHECKING:
     from zenml.config.pipeline_deployment import PipelineDeployment
@@ -189,6 +190,19 @@ class KubeflowOrchestrator(BaseOrchestrator):
             # should not happen, because the stack validation takes care of
             # this, but just in case
             assert container_registry is not None
+
+            if (
+                self.config.container_registry_name is not None
+                and container_registry.name
+                != self.config.container_registry_name
+            ):
+                return (
+                    False,
+                    f"Configured container registry component name "
+                    f"'{self.config.container_registry_name}' does not "
+                    f"match the one in the active stack: "
+                    f"'{self.config.container_registry_name}'",
+                )
 
             contexts, active_context = self.get_kubernetes_contexts()
 
@@ -304,7 +318,10 @@ class KubeflowOrchestrator(BaseOrchestrator):
             return True, ""
 
         return StackValidator(
-            required_components={StackComponentType.CONTAINER_REGISTRY},
+            required_components={
+                StackComponentType.CONTAINER_REGISTRY,
+                StackComponentType.IMAGE_BUILDER,
+            },
             custom_validation_function=_validate_local_requirements,
         )
 
@@ -354,7 +371,7 @@ class KubeflowOrchestrator(BaseOrchestrator):
             stack: The stack on which the pipeline will be deployed.
         """
         docker_image_builder = PipelineDockerImageBuilder()
-        repo_digest = docker_image_builder.build_and_push_docker_image(
+        repo_digest = docker_image_builder.build_docker_image(
             deployment=deployment, stack=stack
         )
         deployment.add_extra(ORCHESTRATOR_DOCKER_IMAGE_KEY, repo_digest)
@@ -362,7 +379,7 @@ class KubeflowOrchestrator(BaseOrchestrator):
     def _configure_container_op(
         self,
         container_op: dsl.ContainerOp,
-        settings: Optional[KubeflowOrchestratorSettings] = None,
+        settings: KubeflowOrchestratorSettings,
     ) -> None:
         """Makes changes in place to the configuration of the container op.
 
@@ -372,23 +389,9 @@ class KubeflowOrchestrator(BaseOrchestrator):
 
         Args:
             container_op: The kubeflow container operation to configure.
-            settings: Optional orchestrator settings for this step.
+            settings: Orchestrator settings for this step.
         """
-        # Path to a metadata file that will be displayed in the KFP UI
-        # This metadata file needs to be in a mounted emptyDir to avoid
-        # sporadic failures with the (not mature) PNS executor
-        # See these links for more information about limitations of PNS +
-        # security context:
-        # https://www.kubeflow.org/docs/components/pipelines/installation/localcluster-deployment/#deploying-kubeflow-pipelines
-        # https://argoproj.github.io/argo-workflows/empty-dir/
-        # KFP will switch to the Emissary executor (soon), when this emptyDir
-        # mount will not be necessary anymore, but for now it's still in alpha
-        # status (https://www.kubeflow.org/docs/components/pipelines/installation/choose-executor/#emissary-executor)
-        volumes: Dict[str, k8s_client.V1Volume] = {
-            "/outputs": k8s_client.V1Volume(
-                name="outputs", empty_dir=k8s_client.V1EmptyDirVolumeSource()
-            ),
-        }
+        volumes: Dict[str, k8s_client.V1Volume] = {}
 
         stack = Client().active_stack
 
@@ -444,13 +447,17 @@ class KubeflowOrchestrator(BaseOrchestrator):
         for k, v in KFP_POD_LABELS.items():
             container_op.add_pod_label(k, v)
 
-        if settings and settings.pod_settings:
+        if settings.pod_settings:
             apply_pod_settings(
                 container_op=container_op, settings=settings.pod_settings
             )
 
-        # Mounts configmap containing Metadata gRPC server configuration.
-        container_op.apply(utils.mount_config_map_op("metadata-grpc-configmap"))
+        # Disable caching in KFP v1 only works like this, replace by the second
+        # line in the future
+        container_op.execution_options.caching_strategy.max_cache_staleness = (
+            "P0D"
+        )
+        # container_op.set_caching_options(enable_caching=False)
 
     @staticmethod
     def _configure_container_resources(
@@ -550,17 +557,13 @@ class KubeflowOrchestrator(BaseOrchestrator):
             for step_name, step in deployment.steps.items():
                 # The command will be needed to eventually call the python step
                 # within the docker container
-                command = (
-                    KubeflowEntrypointConfiguration.get_entrypoint_command()
-                )
+                command = StepEntrypointConfiguration.get_entrypoint_command()
 
                 # The arguments are passed to configure the entrypoint of the
                 # docker container when the step is called.
-                metadata_ui_path = "/outputs/mlpipeline-ui-metadata.json"
                 arguments = (
-                    KubeflowEntrypointConfiguration.get_entrypoint_arguments(
+                    StepEntrypointConfiguration.get_entrypoint_arguments(
                         step_name=step_name,
-                        **{METADATA_UI_PATH_OPTION: metadata_ui_path},
                     )
                 )
 
@@ -576,14 +579,10 @@ class KubeflowOrchestrator(BaseOrchestrator):
                     image=image_name,
                     command=command,
                     arguments=arguments,
-                    output_artifact_paths={
-                        "mlpipeline-ui-metadata": metadata_ui_path,
-                    },
                 )
 
                 settings = cast(
-                    Optional[KubeflowOrchestratorSettings],
-                    self.get_settings(step),
+                    KubeflowOrchestratorSettings, self.get_settings(step)
                 )
                 self._configure_container_op(
                     container_op=container_op,
@@ -607,10 +606,14 @@ class KubeflowOrchestrator(BaseOrchestrator):
                 # Update dictionary of container ops with the current one
                 step_name_to_container_op[step.config.name] = container_op
 
+        orchestrator_run_name = get_orchestrator_run_name(
+            pipeline_name=deployment.pipeline.name
+        )
+
         # Get a filepath to use to save the finished yaml to
         fileio.makedirs(self.pipeline_directory)
         pipeline_file_path = os.path.join(
-            self.pipeline_directory, f"{deployment.run_name}.yaml"
+            self.pipeline_directory, f"{orchestrator_run_name}.yaml"
         )
 
         # write the argo pipeline yaml
@@ -619,35 +622,39 @@ class KubeflowOrchestrator(BaseOrchestrator):
             pipeline_name=deployment.pipeline.name,
             package_path=pipeline_file_path,
         )
+        logger.info(
+            "Writing Kubeflow workflow definition to `%s`.", pipeline_file_path
+        )
 
         # using the kfp client uploads the pipeline to kubeflow pipelines and
         # runs it there
         self._upload_and_run_pipeline(
             deployment=deployment,
             pipeline_file_path=pipeline_file_path,
+            run_name=orchestrator_run_name,
         )
 
     def _upload_and_run_pipeline(
         self,
         deployment: "PipelineDeployment",
         pipeline_file_path: str,
+        run_name: str,
     ) -> None:
         """Tries to upload and run a KFP pipeline.
 
         Args:
             deployment: The pipeline deployment.
             pipeline_file_path: Path to the pipeline definition file.
+            run_name: The Kubeflow run name.
+
+        Raises:
+            RuntimeError: If Kubeflow API returns an error.
         """
         pipeline_name = deployment.pipeline.name
-        orchestrator_run_name = get_orchestrator_run_name(
-            pipeline_name=pipeline_name
-        )
-        enable_cache = deployment.pipeline.enable_cache
         settings = cast(
-            Optional[KubeflowOrchestratorSettings],
-            self.get_settings(deployment),
+            KubeflowOrchestratorSettings, self.get_settings(deployment)
         )
-        user_namespace = settings.user_namespace if settings else None
+        user_namespace = settings.user_namespace
 
         try:
             logger.info(
@@ -687,9 +694,9 @@ class KubeflowOrchestrator(BaseOrchestrator):
                 )
                 result = client.create_recurring_run(
                     experiment_id=experiment.id,
-                    job_name=orchestrator_run_name,
+                    job_name=run_name,
                     pipeline_package_path=pipeline_file_path,
-                    enable_caching=enable_cache,
+                    enable_caching=False,
                     cron_expression=deployment.schedule.cron_expression,
                     start_time=deployment.schedule.utc_start_time,
                     end_time=deployment.schedule.utc_end_time,
@@ -702,22 +709,27 @@ class KubeflowOrchestrator(BaseOrchestrator):
                 logger.info(
                     "No schedule detected. Creating a one-off pipeline run.."
                 )
-                result = client.create_run_from_pipeline_package(
-                    pipeline_file_path,
-                    arguments={},
-                    run_name=orchestrator_run_name,
-                    enable_caching=enable_cache,
-                    namespace=user_namespace,
-                )
+                try:
+                    result = client.create_run_from_pipeline_package(
+                        pipeline_file_path,
+                        arguments={},
+                        run_name=run_name,
+                        enable_caching=False,
+                        namespace=user_namespace,
+                    )
+                except ApiException:
+                    raise RuntimeError(
+                        f"Failed to create {run_name} on kubeflow! "
+                        "Please check stack component settings and configuration!"
+                    )
+
                 logger.info(
                     "Started one-off pipeline run with ID '%s'.", result.run_id
                 )
 
-                if self.config.synchronous:
-                    # TODO [ENG-698]: Allow configuration of the timeout as a
-                    #  setting
+                if settings.synchronous:
                     client.wait_for_run_completion(
-                        run_id=result.run_id, timeout=1200
+                        run_id=result.run_id, timeout=settings.timeout
                     )
         except urllib3.exceptions.HTTPError as error:
             logger.warning(
@@ -748,12 +760,12 @@ class KubeflowOrchestrator(BaseOrchestrator):
 
     def _get_kfp_client(
         self,
-        settings: Optional[KubeflowOrchestratorSettings] = None,
+        settings: KubeflowOrchestratorSettings,
     ) -> kfp.Client:
         """Creates a KFP client instance.
 
         Args:
-            settings: Optional settings which can be used to
+            settings: Settings which can be used to
                 configure the client instance.
 
         Returns:
@@ -763,14 +775,29 @@ class KubeflowOrchestrator(BaseOrchestrator):
             "kube_context": self.config.kubernetes_context,
         }
 
-        if settings:
-            client_args.update(settings.client_args)
+        client_args.update(settings.client_args)
 
         # The host and namespace are stack component configurations that refer
         # to the Kubeflow deployment. We don't want these overwritten on a
         # run by run basis by user settings
         client_args["host"] = self.config.kubeflow_hostname
         client_args["namespace"] = self.config.kubeflow_namespace
+
+        # Handle username and password, ignore the case if one is passed and not the other
+        # Also do not attempt to get cookie if cookie is already passed in client_args
+        if settings.client_username and settings.client_password:
+            # If cookie is already set, then ignore
+            if "cookie" in client_args:
+                logger.warning(
+                    "Cookie already set in `client_args`, ignoring `client_username` and `client_password`..."
+                )
+            else:
+                session_cookie = self._get_session_cookie(
+                    username=settings.client_username,
+                    password=settings.client_password,
+                )
+
+                client_args["cookies"] = session_cookie
 
         return kfp.Client(**client_args)
 
@@ -828,13 +855,76 @@ class KubeflowOrchestrator(BaseOrchestrator):
             Port to use for the KFP UI daemon.
         """
         port = self.config.kubeflow_pipelines_ui_port
-        if port == DEFAULT_KFP_UI_PORT and not networking_utils.port_available(
-            port
+        if (
+            port == DEFAULT_KFP_UI_PORT
+            and not networking_utils.port_available(port)
         ):
             # if the user didn't specify a specific port and the default
             # port is occupied, fallback to a random open port
             port = networking_utils.find_available_port()
         return port
+
+    def _get_session_cookie(self, username: str, password: str) -> str:
+        """Gets session cookie from username and password.
+
+        Args:
+            username: Username for kubeflow host.
+            password: Password for kubeflow host.
+
+        Raises:
+            RuntimeError: If the cookie fetching failed.
+
+        Returns:
+            Cookie with the prefix `authsession=`.
+        """
+        if self.config.kubeflow_hostname is None:
+            raise RuntimeError(
+                "You must configure the Kubeflow orchestrator "
+                "with the `kubeflow_hostname` parameter which usually ends "
+                "with `/pipeline` (e.g. `https://mykubeflow.com/pipeline`). "
+                "Please update the current kubeflow orchestrator with: "
+                f"`zenml orchestrator update {self.name} "
+                "--kubeflow_hostname=<MY_KUBEFLOW_HOST>`"
+            )
+
+        # Get cookie
+        logger.info(
+            f"Attempting to fetch session cookie from {self.config.kubeflow_hostname} "
+            "with supplied username and password..."
+        )
+        session = requests.Session()
+        try:
+            response = session.get(self.config.kubeflow_hostname)
+            response.raise_for_status()
+        except (
+            requests.exceptions.HTTPError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.RequestException,
+        ) as e:
+            raise RuntimeError(
+                f"Error while trying to fetch kubeflow cookie: {e}"
+            )
+
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        data = {"login": username, "password": password}
+        try:
+            response = session.post(response.url, headers=headers, data=data)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as errh:
+            raise RuntimeError(
+                f"Error while trying to fetch kubeflow cookie: {errh}"
+            )
+        cookie_dict = session.cookies.get_dict()  # type: ignore[no-untyped-call]
+
+        if "authservice_session" not in cookie_dict:
+            raise RuntimeError("Invalid username and/or password!")
+
+        logger.info("Session cookie fetched successfully!")
+
+        return "authservice_session=" + str(cookie_dict["authservice_session"])
 
     def list_manual_setup_steps(
         self, container_registry_name: str, container_registry_path: str
@@ -872,6 +962,21 @@ class KubeflowOrchestrator(BaseOrchestrator):
         logger.info("\n".join(kubeflow_commands))
 
     @property
+    def skip_ui_daemon_provisioning(self) -> bool:
+        """Whether the UI daemon provisioning should be skipped.
+
+        If a hostname is configured, the UI is already accessible using this
+        host and we don't need to port-forward the UI.
+
+        Returns:
+            Whether the UI daemon provisioning should be skipped.
+        """
+        if self.config.kubeflow_hostname:
+            return True
+
+        return self.config.skip_ui_daemon_provisioning
+
+    @property
     def is_provisioned(self) -> bool:
         """Returns if a local k3d cluster for this orchestrator exists.
 
@@ -879,9 +984,10 @@ class KubeflowOrchestrator(BaseOrchestrator):
             True if a local k3d cluster exists, False otherwise.
         """
         if not local_deployment_utils.check_prerequisites(
-            skip_k3d=self.config.skip_cluster_provisioning or not self.is_local,
+            skip_k3d=self.config.skip_cluster_provisioning
+            or not self.is_local,
             skip_kubectl=self.config.skip_cluster_provisioning
-            and self.config.skip_ui_daemon_provisioning,
+            and self.skip_ui_daemon_provisioning,
         ):
             # if any prerequisites are missing there is certainly no
             # local deployment running
@@ -916,8 +1022,7 @@ class KubeflowOrchestrator(BaseOrchestrator):
                 or not self.is_cluster_running
             )
             and (
-                self.config.skip_ui_daemon_provisioning
-                or not self.is_daemon_running
+                self.skip_ui_daemon_provisioning or not self.is_daemon_running
             )
         )
 
@@ -960,7 +1065,7 @@ class KubeflowOrchestrator(BaseOrchestrator):
         Returns:
             True if the daemon is running, False otherwise.
         """
-        if self.config.skip_ui_daemon_provisioning:
+        if self.skip_ui_daemon_provisioning:
             return True
 
         if sys.platform != "win32":
@@ -993,7 +1098,22 @@ class KubeflowOrchestrator(BaseOrchestrator):
                 "Please install 'k3d' and 'kubectl' and try again."
             )
 
-        container_registry = Client().active_stack.container_registry
+        if self.config.container_registry_name is None:
+            container_registry = Client().active_stack.container_registry
+        else:
+            container_registry_model = Client().get_stack_component(
+                component_type=StackComponentType.CONTAINER_REGISTRY,
+                name_id_or_prefix=self.config.container_registry_name,
+            )
+
+            # should not happen, because the stack validation takes care of
+            # this, but just in case
+            assert container_registry_model is not None
+
+            container_registry = cast(
+                BaseContainerRegistry,
+                StackComponent.from_model(container_registry_model),
+            )
 
         # should not happen, because the stack validation takes care of this,
         # but just in case
@@ -1056,10 +1176,7 @@ class KubeflowOrchestrator(BaseOrchestrator):
         if self.config.skip_cluster_provisioning:
             return
 
-        if (
-            not self.config.skip_ui_daemon_provisioning
-            and self.is_daemon_running
-        ):
+        if not self.skip_ui_daemon_provisioning and self.is_daemon_running:
             local_deployment_utils.stop_kfp_ui_daemon(
                 pid_file_path=self._pid_file_path
             )
@@ -1124,10 +1241,7 @@ class KubeflowOrchestrator(BaseOrchestrator):
             logger.info("Local kubeflow pipelines deployment not provisioned.")
             return
 
-        if (
-            not self.config.skip_ui_daemon_provisioning
-            and self.is_daemon_running
-        ):
+        if not self.skip_ui_daemon_provisioning and self.is_daemon_running:
             local_deployment_utils.stop_kfp_ui_daemon(
                 pid_file_path=self._pid_file_path
             )

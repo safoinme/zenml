@@ -64,14 +64,6 @@ Depending on your use-case, however, you may also need to provide additional
 configuration parameters pertaining to [authentication](#authentication-methods)
 to match your deployment scenario.
 
-{% hint style="info" %}
-Configuring an Azure Artifact Store in can be a complex and error-prone process,
-especially if you plan on using it alongside other stack components running in
-the Azure cloud. You might consider referring to the 
-[ZenML Cloud Guide](../../popular-stack-guides/azure/azure.md)
-for a more holistic approach to configuring full Azure-based stacks for ZenML.
-{% endhint %}
-
 ### Authentication Methods
 
 Integrating and using an Azure Artifact Store in your pipelines is not
@@ -182,7 +174,7 @@ zenml secrets-manager secret register az_secret -s azure \
 {% endtabs %}
 
 For more, up-to-date information on the Azure Artifact Store implementation and
-its configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-azure/#zenml.integrations.azure.artifact_stores).
+its configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-azure/#zenml.integrations.azure.artifact_stores).
 
 ## How do you use it?
 

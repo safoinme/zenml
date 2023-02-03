@@ -13,13 +13,17 @@
 #  permissions and limitations under the License.
 """Implementation of a post-execution step class."""
 
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import UUID
 
 from zenml.client import Client
 from zenml.enums import ExecutionStatus
-from zenml.models import StepRunModel
+from zenml.models import StepRunResponseModel
 from zenml.post_execution.artifact import ArtifactView
+
+if TYPE_CHECKING:
+    from zenml.config.base_settings import BaseSettings
+    from zenml.config.step_configurations import StepConfiguration, StepSpec
 
 
 class StepView:
@@ -28,7 +32,7 @@ class StepView:
     This can be used to query artifact information associated with a pipeline step.
     """
 
-    def __init__(self, model: StepRunModel):
+    def __init__(self, model: StepRunResponseModel):
         """Initializes a post-execution step object.
 
         In most cases `StepView` objects should not be created manually
@@ -80,7 +84,7 @@ class StepView:
         Returns:
             The step entrypoint_name.
         """
-        return self._model.entrypoint_name
+        return self.step_configuration.name
 
     @property
     def name(self) -> str:
@@ -117,25 +121,34 @@ class StepView:
         return self._model.docstring
 
     @property
+    def source_code(self) -> Optional[str]:
+        """Source code of the step function or class.
+
+        Returns:
+            The source code of the step function or class.
+        """
+        return self._model.source_code
+
+    @property
     def parameters(self) -> Dict[str, str]:
         """The parameters used to run this step.
 
         Returns:
             The parameters used to run this step.
         """
-        return self._model.parameters
+        return self.step_configuration.parameters
 
     @property
-    def step_configuration(self) -> Dict[str, Any]:
+    def step_configuration(self) -> "StepConfiguration":
         """Returns the step configuration.
 
         Returns:
             The step configuration.
         """
-        return self._model.step_configuration
+        return self._model.step.config
 
     @property
-    def settings(self) -> Dict[str, Any]:
+    def settings(self) -> Dict[str, "BaseSettings"]:
         """Returns the step settings.
 
         These are runtime settings passed down to stack components, which
@@ -144,8 +157,7 @@ class StepView:
         Returns:
             The step settings.
         """
-        settings = self.step_configuration["config"]["settings"]
-        return cast(Dict[str, Any], settings)
+        return self.step_configuration.settings
 
     @property
     def extra(self) -> Dict[str, Any]:
@@ -157,18 +169,16 @@ class StepView:
         Returns:
             The extra dictionary.
         """
-        extra = self.step_configuration["config"]["extra"]
-        return cast(Dict[str, Any], extra)
+        return self.step_configuration.extra
 
     @property
-    def enable_cache(self) -> bool:
+    def enable_cache(self) -> Optional[bool]:
         """Returns whether caching is enabled for this step.
 
         Returns:
             Whether caching is enabled for this step.
         """
-        enable_cache = self.step_configuration["config"]["enable_cache"]
-        return cast(bool, enable_cache)
+        return self.step_configuration.enable_cache
 
     @property
     def step_operator(self) -> Optional[str]:
@@ -177,8 +187,7 @@ class StepView:
         Returns:
             The name of the step operator of the step.
         """
-        step_operator = self.step_configuration["config"]["step_operator"]
-        return cast(Optional[str], step_operator)
+        return self.step_configuration.step_operator
 
     @property
     def experiment_tracker(self) -> Optional[str]:
@@ -187,13 +196,10 @@ class StepView:
         Returns:
             The name of the experiment tracker of the step.
         """
-        experiment_tracker = self.step_configuration["config"][
-            "experiment_tracker"
-        ]
-        return cast(Optional[str], experiment_tracker)
+        return self.step_configuration.experiment_tracker
 
     @property
-    def spec(self) -> Dict[str, Any]:
+    def spec(self) -> "StepSpec":
         """Returns the step spec.
 
         The step spec defines the source path and upstream steps of a step and
@@ -202,8 +208,7 @@ class StepView:
         Returns:
             The step spec.
         """
-        spec = self.step_configuration["spec"]
-        return cast(Dict[str, Any], spec)
+        return self._model.step.spec
 
     @property
     def status(self) -> ExecutionStatus:
@@ -294,10 +299,9 @@ class StepView:
             # we already fetched inputs, no need to do anything
             return
 
-        inputs = Client().zen_store.get_run_step_inputs(self.id)
         self._inputs = {
-            input_name: ArtifactView(input)
-            for input_name, input in inputs.items()
+            name: ArtifactView(artifact_model)
+            for name, artifact_model in self._model.input_artifacts.items()
         }
 
     def _ensure_outputs_fetched(self) -> None:
@@ -306,9 +310,9 @@ class StepView:
             # we already fetched outputs, no need to do anything
             return
 
-        outputs = Client().zen_store.list_artifacts(parent_step_id=self.id)
         self._outputs = {
-            output.name: ArtifactView(output) for output in outputs
+            name: ArtifactView(artifact_model)
+            for name, artifact_model in self._model.output_artifacts.items()
         }
 
     def __repr__(self) -> str:

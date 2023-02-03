@@ -8,17 +8,16 @@ description: Configuring pipelines, steps, and stack components in ZenML.
 
 {% embed url="https://www.youtube.com/embed/hI-UNV7uoNI" %} Configuring pipelines, steps, and stack components in ZenML {% endembed %}
 
-This video gives an overview of everything discussed in this chapter,
-especially with a focus on the [post ZenML 0.20.0](../../guidelines/migration-zero-twenty.md) world!
+This video gives an overview of everything discussed in this chapter.
 
 ## Settings in ZenML
 
-As discussed in a [previous chapter](../../starter-guide/pipelines/iterating.md), there are two ways to configure anything in ZenML:
+As discussed in a [previous chapter](../../starter-guide/pipelines/parameters-and-caching.md), there are two ways to configure anything in ZenML:
 
 - `BaseParameters`: Runtime configuration passed down as a parameter to step functions.
 - `BaseSettings`: Runtime settings passed down to stack components and pipelines.
 
-We have [already discussed `BaseParameters`](../../starter-guide/pipelines/iterating.md) and now is the time to talk about its brother, `BaseSettings`.
+We have [already discussed `BaseParameters`](../../starter-guide/pipelines/parameters-and-caching.md) and now is the time to talk about its brother, `BaseSettings`.
 
 ### What can be configured?
 
@@ -45,9 +44,17 @@ Settings are categorized into two types:
   - [`WandbExperimentTrackerSettings`](../../component-gallery/experiment-trackers/wandb.md) to specify W&B settings.
   - [`WhylogsDataValidatorSettings`](../../component-gallery/data-validators/whylogs.md) to specify Whylogs settings.
 
-For stack component specific settings, you might be wondering what the difference is between these and the configuration passed in while doing `zenml stack-component register name --param1=paramvalue --param2=paramvalue` etc. The answer is that the configuration passed in at registration time is static and fixed throughout all pipeline runs, while the settings can change. 
+For stack component specific settings, you might be wondering what the difference is between these and the configuration passed in while doing `zenml stack-component register <NAME> --config1=configvalue --config2=configvalue` etc.
+The answer is that the configuration passed in at registration time is static and fixed throughout all pipeline runs, while the settings can change.
 
 A good example of this is the [`MLflow Experiment Tracker`](../../component-gallery/experiment-trackers/mlflow.md), where configuration which remains static such as the `tracking_url` is sent through at registration time, while runtime configuration such as the `experiment_name` (which might change every pipeline run) is sent through as runtime settings.
+
+Even though settings can be overridden at runtime, you can also specify *default* values for settings while configuring a stack component. For example, you could set a default value for the `nested` setting of your MLflow experiment tracker:
+`zenml experiment-tracker register <NAME> --flavor=mlflow --nested=True`
+
+This means that all pipelines that run using this experiment tracker use nested MLflow runs unless overridden by specifying settings for the pipeline at runtime.
+
+{% embed url="https://www.youtube.com/embed/AdwW6DlCWFE" %} Stack Component Config vs Settings in ZenML {% endembed %}
 
 #### Using objects or dicts
 
@@ -62,7 +69,7 @@ settings={'docker': DockerSettings(requirements=['pandas'])}
 Or like this:
 
 ```python
-settings={'docker': {'requirements': ['pandas'])}
+settings={'docker': {'requirements': ['pandas']}}
 ```
 
 ### How to use settings

@@ -32,7 +32,7 @@ To use the Azure secrets manager, we need:
 * The [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) 
 installed and authenticated.
 * The name of the key vault to use. You can find a list of your key vaults by 
-going to the[Azure portal](https://portal.azure.com/#home) and searching for 
+going to the [Azure portal](https://portal.azure.com/#home) and searching for 
 `key vaults`. If you don't have any key vault yet, follow the 
 * [deployment guide](#how-to-deploy-it) to create one.
 
@@ -57,4 +57,4 @@ A concrete example of using the Azure secrets manager can be found
 [here](https://github.com/zenml-io/zenml/tree/main/examples/cloud_secrets_manager).
 
 For more information and a full list of configurable attributes of the Azure 
-secrets manager, check out the [API Docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-azure/#zenml.integrations.azure.secrets_managers.azure_secrets_manager.AzureSecretsManager).
+secrets manager, check out the [API Docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-azure/#zenml.integrations.azure.secrets_managers.azure_secrets_manager.AzureSecretsManager).

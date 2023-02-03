@@ -14,25 +14,47 @@
 """Pipeline configuration classes."""
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
+from pydantic import root_validator
+
 from zenml.config.base_settings import BaseSettings, SettingsOrDict
 from zenml.config.constants import RESOURCE_SETTINGS_KEY
 from zenml.config.strict_base_model import StrictBaseModel
+from zenml.logger import get_logger
+from zenml.utils import source_utils
 
 if TYPE_CHECKING:
     from zenml.config import ResourceSettings
+
+logger = get_logger(__name__)
 
 
 class PartialArtifactConfiguration(StrictBaseModel):
     """Class representing a partial input/output artifact configuration."""
 
-    artifact_source: Optional[str] = None
     materializer_source: Optional[str] = None
+
+    @root_validator(pre=True)
+    def _remove_deprecated_attributes(
+        cls, values: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Removes deprecated attributes from the values dict.
+
+        Args:
+            values: The values dict used to instantiate the model.
+
+        Returns:
+            The values dict without deprecated attributes.
+        """
+        deprecated_attributes = ["artifact_source"]
+        for deprecated_attribute in deprecated_attributes:
+            if deprecated_attribute in values:
+                values.pop(deprecated_attribute)
+        return values
 
 
 class ArtifactConfiguration(PartialArtifactConfiguration):
     """Class representing a complete input/output artifact configuration."""
 
-    artifact_source: str
     materializer_source: str
 
 
@@ -54,15 +76,32 @@ class PartialStepConfiguration(StepConfigurationUpdate):
     """Class representing a partial step configuration."""
 
     name: str
-    enable_cache: bool
+    caching_parameters: Mapping[str, Any] = {}
     inputs: Mapping[str, PartialArtifactConfiguration] = {}
     outputs: Mapping[str, PartialArtifactConfiguration] = {}
+
+    @root_validator(pre=True)
+    def _remove_deprecated_attributes(
+        cls, values: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Removes deprecated attributes from the values dict.
+
+        Args:
+            values: The values dict used to instantiate the model.
+
+        Returns:
+            The values dict without deprecated attributes.
+        """
+        deprecated_attributes = ["docstring"]
+        for deprecated_attribute in deprecated_attributes:
+            if deprecated_attribute in values:
+                values.pop(deprecated_attribute)
+        return values
 
 
 class StepConfiguration(PartialStepConfiguration):
     """Step configuration class."""
 
-    docstring: Optional[str]
     inputs: Mapping[str, ArtifactConfiguration] = {}
     outputs: Mapping[str, ArtifactConfiguration] = {}
 
@@ -81,11 +120,19 @@ class StepConfiguration(PartialStepConfiguration):
         return ResourceSettings.parse_obj(model_or_dict)
 
 
+class InputSpec(StrictBaseModel):
+    """Step input specification."""
+
+    step_name: str
+    output_name: str
+
+
 class StepSpec(StrictBaseModel):
     """Specification of a pipeline."""
 
     source: str
     upstream_steps: List[str]
+    inputs: Dict[str, InputSpec] = {}
 
     @property
     def module_name(self) -> str:
@@ -123,17 +170,30 @@ class StepSpec(StrictBaseModel):
             True if the other object is referring to the same step.
         """
         if isinstance(other, StepSpec):
-
             if self.upstream_steps != other.upstream_steps:
                 return False
 
-            if self.source == other.source:
+            # TODO: rethink this once we have pipeline versioning
+            # for now we don't compare the inputs because that would force
+            # users to re-register their pipeline if they change an output or
+            # input name
+            # if self.inputs != other.inputs:
+            #     return False
+
+            # Remove internal version pin from older sources for backwards
+            # compatibility
+            source = source_utils.remove_internal_version_pin(self.source)
+            other_source = source_utils.remove_internal_version_pin(
+                other.source
+            )
+
+            if source == other_source:
                 return True
 
-            if self.source.endswith(other.source):
+            if source.endswith(other_source):
                 return True
 
-            if other.source.endswith(self.source):
+            if other_source.endswith(source):
                 return True
 
             return False

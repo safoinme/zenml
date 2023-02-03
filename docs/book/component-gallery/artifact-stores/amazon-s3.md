@@ -67,14 +67,6 @@ configuration parameters pertaining to [authentication](#authentication-methods)
 or [pass advanced configuration parameters](#advanced-configuration) to match
 your S3 compatible service or deployment scenario.
 
-{% hint style="info" %}
-Configuring an S3 Artifact Store in can be a complex and error-prone process,
-especially if you plan on using it alongside other stack components running in
-the AWS cloud. You might consider referring to the
-[ZenML Cloud Guide](../../popular-stack-guides/aws/aws.md)
-for a more holistic approach to configuring full AWS-based stacks for ZenML.
-{% endhint %}
-
 ### Authentication Methods
 
 Integrating and using an S3 compatible Artifact Store in your pipelines is not
@@ -208,7 +200,7 @@ zenml artifact-store register minio_store -f s3 \
 ```
 
 For more, up-to-date information on the S3 Artifact Store implementation and its
-configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-s3/#zenml.integrations.s3.artifact_stores.s3_artifact_store).
+configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-s3/#zenml.integrations.s3.artifact_stores.s3_artifact_store).
 
 ## How do you use it?
 

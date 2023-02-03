@@ -79,8 +79,7 @@ def test_get_hashed_source():
 
 
 def test_prepend_python_path():
-    """Tests that the context manager prepends an element to the pythonpath and
-    removes it again after the context is exited."""
+    """Tests that the context manager prepends an element to the pythonpath and removes it again after the context is exited."""
     path_element = "definitely_not_part_of_pythonpath"
 
     assert path_element not in sys.path
@@ -93,9 +92,7 @@ def test_prepend_python_path():
 def test_loading_class_by_path_prepends_repo_path(
     clean_client, mocker, tmp_path
 ):
-    """Tests that loading a class always prepends the active repository root to
-    the python path."""
-
+    """Tests that loading a class always prepends the active repository root to the python path."""
     os.chdir(str(tmp_path))
 
     Client.initialize()
@@ -121,9 +118,7 @@ def test_loading_class_by_path_prepends_repo_path(
 def test_import_python_file_for_first_time(
     clean_client, mocker, files_dir: Path
 ):
-    """Test that importing a python file as module works and allows for
-    importing of module attributes even with module popped from sys path"""
-
+    """Test that importing a python file as module works and allows for importing of module attributes even with module popped from sys path."""
     SOME_MODULE = "some_module"
     SOME_MODULE_FILENAME = SOME_MODULE + ".py"
     SOME_FUNC = "some_func"
@@ -154,9 +149,7 @@ def test_import_python_file_for_first_time(
 def test_import_python_file_when_already_loaded(
     clean_client, mocker, files_dir: Path
 ):
-    """Test that importing a python file as module works even if it is
-    already on sys path and allows for importing of module attributes"""
-
+    """Test that importing a python file as module works even if it is already on sys path and allows for importing of module attributes."""
     SOME_MODULE = "some_module"
     SOME_MODULE_FILENAME = SOME_MODULE + ".py"
     SOME_FUNC = "some_func"
@@ -191,9 +184,7 @@ def test_import_python_file_when_already_loaded(
 
 
 def test_import_python_file(clean_client, mocker, files_dir: Path):
-    """Test that importing a python file as module works even if it is
-    already imported within the another previously loaded module"""
-
+    """Test that importing a python file as module works even if it is already imported within the another previously loaded module."""
     MAIN_MODULE = "main_module"
     MAIN_MODULE_FILENAME = MAIN_MODULE + ".py"
     SOME_MODULE = "some_module"
@@ -232,3 +223,31 @@ def test_import_python_file(clean_client, mocker, files_dir: Path):
     # Cleanup modules for future tests
     del sys.modules[MAIN_MODULE]
     del sys.modules[SOME_MODULE]
+
+
+def test_class_importing_by_path():
+    """Tests importing a class by path."""
+    from zenml.client import Client
+
+    imported_class = source_utils.import_class_by_path("zenml.client.Client")
+    assert Client is imported_class
+
+    with pytest.raises(ModuleNotFoundError):
+        source_utils.import_class_by_path("zenml.not_a_module.Class")
+
+    with pytest.raises(AttributeError):
+        source_utils.import_class_by_path("zenml.client.NotAClass")
+
+
+def test_internal_pin_removal():
+    """Tests that removing the internal pin removal works."""
+    assert (
+        source_utils.remove_internal_version_pin(
+            "zenml.client.Client@zenml_0.21.0"
+        )
+        == "zenml.client.Client"
+    )
+    assert (
+        source_utils.remove_internal_version_pin("zenml.client.Client")
+        == "zenml.client.Client"
+    )

@@ -36,23 +36,30 @@ To use the Vertex orchestrator, we need:
     zenml integration install gcp
     ```
 * [Docker](https://www.docker.com) installed and running.
-* [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl) installed.
 * A [remote artifact store](../artifact-stores/artifact-stores.md) as part of 
 your stack.
 * A [remote container registry](../container-registries/container-registries.md) 
 as part of your stack.
 * The GCP project ID and location in which you want to run your Vertex 
 AI pipelines.
+* The pipeline client environment needs permissions to create a job in Vertex Pipelines,
+e.g. the `Vertex AI User` role: https://cloud.google.com/vertex-ai/docs/general/access-control#aiplatform.user
+* To run on a schedule, the client environment also needs permissions to create a Google Cloud
+Function (e.g. with the [`cloudfunctions.serviceAgent Role`](https://cloud.google.com/functions/docs/concepts/iam))
+and to create a Google Cloud Scheduler (e.g. with the
+[Cloud Scheduler Job Runner Role](https://cloud.google.com/iam/docs/understanding-roles)). Additionally, it needs
+the [Storage Object Creator Role](https://cloud.google.com/storage/docs/access-control/iam-roles)
+to be able to write the pipeline JSON file to the artifact store directly.
 
 We can then register the orchestrator and use it in our active stack:
 ```shell
-zenml orchestrator register <NAME> \
+zenml orchestrator register <ORCHESTRATOR_NAME> \
     --flavor=vertex \
     --project=<PROJECT_ID> \
     --location=<GCP_LOCATION>
 
-# Add the orchestrator to the active stack
-zenml stack update -o <NAME>
+# Register and activate a stack with the new orchestrator
+zenml stack register <STACK_NAME> -o <ORCHESTRATOR_NAME> ... --set
 ```
 
 {% hint style="info" %}
@@ -68,10 +75,62 @@ You can now run any ZenML pipeline using the Vertex orchestrator:
 python file_that_runs_a_zenml_pipeline.py
 ```
 
+### Run pipelines on a schedule
+
+The Vertex Pipelines orchestrator supports running pipelines on a schedule, using
+logic resembling the [official approach recommended by GCP](https://cloud.google.com/vertex-ai/docs/pipelines/schedule-cloud-scheduler).
+
+ZenML utilizes the [Cloud Scheduler](https://cloud.google.com/scheduler) and
+[Cloud Functions](https://cloud.google.com/functions) services to enable scheduling
+on Vertex Pipelines. The following is the sequence of events that happen when running
+a pipeline on Vertex with a schedule:
+
+* Docker image is created and pushed (see above [containerization](../../advanced-guide/pipelines/containerization.md)).
+* The Vertex AI pipeline JSON file is copied to the [Artifact Store](../../component-gallery/artifact-stores/artifact-stores.md) specified in your [Stack](../../starter-guide/stacks/stacks.md)
+* Cloud Function is created that creates the Vertex Pipeline job when triggered.
+* Cloud Scheduler job is created that triggers the Cloud Function on the defined schedule.
+
+Therefore, to run on a schedule, the client environment needs permissions to create a Google Cloud
+Function (e.g. with the [`cloudfunctions.serviceAgent` Role](https://cloud.google.com/functions/docs/concepts/iam))
+and to create a Google Cloud Scheduler (e.g. with the
+[Cloud Scheduler Job Runner Role](https://cloud.google.com/iam/docs/understanding-roles)).
+Additionally, it needs
+the [Storage Object Creator Role](https://cloud.google.com/storage/docs/access-control/iam-roles)
+to be able to write the pipeline JSON file to the artifact store directly.
+
+Once your have these permissions set in your local GCP CLI, here is how to create a scheduled
+Vertex pipeline in ZenML:
+
+```python
+from zenml.config.schedule import Schedule
+
+# Run a pipeline every 5th minute
+pipeline_instance.run(
+    schedule=Schedule(
+        cron_expression="*/5 * * * *"
+    )
+)
+```
+
+{% hint style="warning" %}
+The Vertex orchestrator only supports the `cron_expression` parameter in the `Schedule` object,
+and will ignore all other parameters supplied to define the schedule.
+{% endhint %}
+
+#### How to delete a scheduled pipeline
+
+Note that ZenML only gets involved to schedule a run, but maintaining the
+lifecycle of the schedule is the responsibility of the
+user.
+
+In order to cancel a scheduled Vertex pipeline, you need to manually delete the
+generated Google Cloud Function, along with the Cloud Scheduler job that schedules
+it (via the UI or the CLI).
+
 ### Additional configuration
 
 For additional configuration of the Vertex orchestrator, you can pass
-`VertexOrchestratorSettings` which allows you to configure the following attributes:
+`VertexOrchestratorSettings` which allows you to configure (among others) the following attributes:
 
 * `pod_settings`: Node selectors, affinity and tolerations to apply to the Kubernetes Pods running
 your pipline. These can be either specified using the Kubernetes model objects or as dictionaries.
@@ -119,11 +178,16 @@ vertex_settings = VertexOrchestratorSettings(
   ...
 ```
 
+Check out the
+[API docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-gcp/#zenml.integrations.gcp.flavors.vertex_orchestrator_flavor.VertexOrchestratorSettings)
+for a full list of available attributes and [this docs page](../..//advanced-guide/pipelines/settings.md)
+for more information on how to specify settings.
+
 A concrete example of using the Vertex orchestrator can be found 
 [here](https://github.com/zenml-io/zenml/tree/main/examples/vertex_ai_orchestration).
 
 For more information and a full list of configurable attributes of the Vertex 
-orchestrator, check out the [API Docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-gcp/#zenml.integrations.gcp.orchestrators.vertex_orchestrator.VertexOrchestrator).
+orchestrator, check out the [API Docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-gcp/#zenml.integrations.gcp.orchestrators.vertex_orchestrator.VertexOrchestrator).
 
 ### Enabling CUDA for GPU-backed hardware
 

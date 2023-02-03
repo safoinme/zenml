@@ -43,6 +43,8 @@ class SeldonDeploymentConfig(ServiceConfig):
         model_name: the name of the model. Multiple versions of the same model
             should use the same model name.
         implementation: the Seldon Core implementation used to serve the model.
+            The implementation type can be one of the following: `TENSORFLOW_SERVER`,
+            `SKLEARN_SERVER`, `XGBOOST_SERVER`, `custom`.
         replicas: number of replicas to use for the prediction service.
         secret_name: the name of a Kubernetes secret containing additional
             configuration parameters for the Seldon Core deployment (e.g.
@@ -183,7 +185,8 @@ class SeldonDeploymentService(BaseService):
         )
 
         model_deployer = cast(
-            SeldonModelDeployer, SeldonModelDeployer.get_active_model_deployer()
+            SeldonModelDeployer,
+            SeldonModelDeployer.get_active_model_deployer(),
         )
         return model_deployer.seldon_client
 
@@ -355,7 +358,8 @@ class SeldonDeploymentService(BaseService):
             return None
         namespace = self._get_client().namespace
         model_deployer = cast(
-            SeldonModelDeployer, SeldonModelDeployer.get_active_model_deployer()
+            SeldonModelDeployer,
+            SeldonModelDeployer.get_active_model_deployer(),
         )
         return os.path.join(
             model_deployer.config.base_url,

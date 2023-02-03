@@ -5,25 +5,28 @@
 * [Introduction](./getting-started/introduction.md)
 * [Core Concepts](./getting-started/core-concepts.md)
 * [Installation](./getting-started/installation/installation.md)
-  * [Installation on M1 Macs](./getting-started/installation/m1-mac-installation.md)
 * [Quickstart](https://github.com/zenml-io/zenml/tree/main/examples/quickstart)
 * [Deploying ZenML](./getting-started/deploying-zenml/deploying-zenml.md)
   * [One Click Deployment using CLI](./getting-started/deploying-zenml/cli.md)
   * [Deploying with Docker](./getting-started/deploying-zenml/docker.md)
   * [Deploying with Helm](./getting-started/deploying-zenml/helm.md)
+  * [Troubleshooting your server](./getting-started/deploying-zenml/troubleshooting.md)
+* [Architecture Diagrams](getting-started/architecture-diagrams.md)
 * [Examples](./getting-started/examples.md)
 
 ## Starter Guide
 
 * [Pipelines](./starter-guide/pipelines/pipelines.md)
+  * [Dashboard Overview](./starter-guide/pipelines/dashboard.md)
   * [Fetching Pipelines](./starter-guide/pipelines/fetching-pipelines.md)
-  * [Step Parameterization and Caching](./starter-guide/pipelines/iterating.md)
+  * [Step Parameterization and Caching](./starter-guide/pipelines/parameters-and-caching.md)
 * [Stacks](./starter-guide/stacks/stacks.md)
   * [Registering Stacks](./starter-guide/stacks/registering-stacks.md)
   * [Managing Stacks](./starter-guide/stacks/managing-stacks.md)
 * [Collaboration](./starter-guide/collaborate/collaborate.md)
   * [Connecting to a Deployed ZenML](./starter-guide/collaborate/zenml-deployment.md)
   * [Inviting Users](./starter-guide/collaborate/users.md)
+  * [User Roles & Permissions](./starter-guide/collaborate/roles-and-permissions.md)
 
 ## Advanced Guide
 
@@ -33,6 +36,7 @@
   * [Passing Custom Data Types through Steps (Materializers)](./advanced-guide/pipelines/materializers.md)
   * [Specifying Step Resources](./advanced-guide/pipelines/step-resources.md)
   * [Enabling GPU-backed hardware](./advanced-guide/pipelines/gpu-hardware.md)
+  * [Scheduling Pipeline Runs](./advanced-guide/pipelines/scheduling-runs.md)
   * [Accessing Metadata within Steps](./advanced-guide/pipelines/step-metadata.md)
   * [Controlling the Step Execution Order](./advanced-guide/pipelines/step-order.md)
 * [Extending Stacks](./advanced-guide/stacks/stacks.md)
@@ -57,9 +61,10 @@
   * [Kubeflow Orchestrator](./component-gallery/orchestrators/kubeflow.md)
   * [Kubernetes Orchestrator](./component-gallery/orchestrators/kubernetes.md)
   * [Google Cloud VertexAI Orchestrator](./component-gallery/orchestrators/gcloud-vertexai.md)
+  * [AWS Sagemaker Orchestrator](./component-gallery/orchestrators/sagemaker.md)
   * [Tekton Orchestrator](./component-gallery/orchestrators/tekton.md)
-  * [GitHub Actions Orchestrator](./component-gallery/orchestrators/github-actions.md)
   * [Airflow Orchestrator](./component-gallery/orchestrators/airflow.md)
+  * [GitHub Actions Orchestrator](./component-gallery/orchestrators/github-actions.md)
   * [Develop a Custom Orchestrator](./component-gallery/orchestrators/custom.md)
 * [Artifact Stores](./component-gallery/artifact-stores/artifact-stores.md)
   * [Local Artifact Store](./component-gallery/artifact-stores/local.md)
@@ -92,11 +97,13 @@
 * [Experiment Trackers](./component-gallery/experiment-trackers/experiment-trackers.md)
   * [MLflow](./component-gallery/experiment-trackers/mlflow.md)
   * [Weights & Biases](./component-gallery/experiment-trackers/wandb.md)
+  * [Neptune](./component-gallery/experiment-trackers/neptune.md)
   * [Develop a Custom Experiment Tracker](./component-gallery/experiment-trackers/custom.md)
 * [Model Deployers](./component-gallery/model-deployers/model-deployers.md)
   * [MLflow](./component-gallery/model-deployers/mlflow.md)
   * [Seldon](./component-gallery/model-deployers/seldon.md)
   * [KServe](./component-gallery/model-deployers/kserve.md)
+  * [BentoML](./component-gallery/model-deployers/bentoml.md)
   * [Develop a Custom Model Deployer](./component-gallery/model-deployers/custom.md)
 * [Step Operators](./component-gallery/step-operators/step-operators.md)
   * [Amazon SageMaker](./component-gallery/step-operators/amazon-sagemaker.md)
@@ -113,6 +120,10 @@
 * [Annotators](./component-gallery/annotators/annotators.md)
   * [Label Studio](./component-gallery/annotators/label-studio.md)
   * [Develop a Custom Annotator](./component-gallery/annotators/custom.md)
+* [Image Builders](./component-gallery/image-builders/image-builders.md)
+  * [Local Image Builder](./component-gallery/image-builders/local.md)
+  * [Kaniko Image Builder](./component-gallery/image-builders/kaniko.md)
+  * [Develop a Custom Image Builder](./component-gallery/image-builders/custom.md)
 
 ## Guidelines
 
@@ -124,6 +135,7 @@
 ## Misc
 
 * [Contribution Guide](misc/contributing.md)
+* [Debugging Guide](misc/debugging.md)
 * [External Integration Guide](misc/integrating.md)
 * [Usage Analytics](misc/usage-analytics.md)
 

@@ -15,7 +15,6 @@
 
 import argparse
 import socket
-from typing import Optional, cast
 
 from kubernetes import client as k8s_client
 
@@ -28,9 +27,6 @@ from zenml.integrations.kubernetes.flavors.kubernetes_orchestrator_flavor import
     KubernetesOrchestratorSettings,
 )
 from zenml.integrations.kubernetes.orchestrators import kube_utils
-from zenml.integrations.kubernetes.orchestrators.dag_runner import (
-    ThreadedDagRunner,
-)
 from zenml.integrations.kubernetes.orchestrators.kubernetes_orchestrator import (
     ENV_ZENML_KUBERNETES_RUN_ID,
 )
@@ -38,6 +34,7 @@ from zenml.integrations.kubernetes.orchestrators.manifest_utils import (
     build_pod_manifest,
 )
 from zenml.logger import get_logger
+from zenml.orchestrators.dag_runner import ThreadedDagRunner
 from zenml.utils import yaml_utils
 
 logger = get_logger(__name__)
@@ -96,13 +93,9 @@ def main() -> None:
             step_name=pipeline_step_name
         )
 
-        settings = cast(
-            Optional[KubernetesOrchestratorSettings],
-            KubernetesOrchestratorSettings.parse_obj(
-                deployment_config.steps[pipeline_step_name].config.settings.get(
-                    "orchestrator.kubernetes", {}
-                )
-            ),
+        step_config = deployment_config.steps[pipeline_step_name].config
+        settings = KubernetesOrchestratorSettings.parse_obj(
+            step_config.settings.get("orchestrator.kubernetes", {})
         )
 
         # Define Kubernetes pod manifest.

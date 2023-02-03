@@ -697,7 +697,7 @@ If you wish to remove an attribute (or multiple attributes) from a stack
 component, use the following command:
 
 ```shell
-zenml STACK_COMPONENT remove-attribute STACK_COMPONENT_NAME --ATTRIBUTE_NAME [--OTHER_ATTRIBUTE_NAME]
+zenml STACK_COMPONENT remove-attribute STACK_COMPONENT_NAME ATTRIBUTE_NAME [OTHER_ATTRIBUTE_NAME]
 ```
 
 Note that you can only remove optional attributes.
@@ -726,7 +726,7 @@ Since every pipeline run creates a new pipeline by default, you might
 occasionally want to delete a pipeline, which you can do via:
 
 ```bash
-zenml pipeline delete PIPELINE_NAME
+zenml pipeline delete <PIPELINE_NAME>
 ```
 
 This will delete the pipeline and change all corresponding pipeline runs to
@@ -738,28 +738,51 @@ To list all pipeline runs that you have executed, use:
 zenml pipeline runs list
 ```
 
-These are currently read-only and cannot be modified or deleted.
-
-If you would like to switch to a different ZenML deployment 
-(e.g., when switching from a local deployment to a cloud deployment), you can
-migrate your existing pipeline runs by exporting them to a YAML file via:
+To delete a pipeline run, use:
 
 ```bash
-zenml pipeline runs export FILENAME.yaml
+zenml pipeline runs delete <PIPELINE_RUN_NAME_OR_ID>
 ```
 
-This will create a FILENAME.yaml containing all your pipeline runs, which, after
-connecting to the new ZenML deployment, you can then import again like this:
+If you run any of your pipelines with `pipeline.run(schedule=...)`, ZenML keeps
+track of the schedule and you can list all schedules via:
 
 ```bash
-zenml pipeline runs import FILENAME.yaml
+zenml pipeline schedule list
 ```
 
-If you would like to migrate old pipeline runs from a legacy metadata store from
-ZenML versions < 0.20.0, you can do so by running the following command:
+To delete a schedule, use:
 
 ```bash
-zenml pipeline runs migrate METADATA_STORE_PATH
+zenml pipeline schedule delete <SCHEDULE_NAME_OR_ID>
+```
+
+Note, however, that this will only delete the reference saved in ZenML and does
+NOT stop/delete the schedule in the respective orchestrator. This still needs to
+be done manually. For example, using the Airflow orchestrator you would have 
+to open the web UI to manually click to stop the schedule from executing.
+
+Each pipeline run automatically saves its artifacts in the artifact store. To
+list all artifacts that have been saved, use:
+
+```bash
+zenml artifact list
+```
+
+The metadata of an artifact can only be deleted if it is no longer linked to
+any pipeline runs, i.e., if the run that produced the artifact and all runs that
+cached any of its steps have been deleted.
+
+To delete all artifacts that are no longer linked to any pipeline runs, use:
+
+```bash
+zenml artifact prune
+```
+
+To delete a specific artifact, use:
+
+```bash
+zenml artifact delete <ARTIFACT_NAME_OR_ID>
 ```
 
 Managing the local ZenML Dashboard
@@ -806,8 +829,7 @@ The TCP port and the host address that the dashboard uses to listen for
 connections can also be customized. Using an IP address that is not the default
 `localhost` or 127.0.0.1 is especially useful if you're running some type of
 local ZenML orchestrator, such as the k3d Kubeflow orchestrator or Docker
-orchestrator, that can't directly access you loopback interface and therefore
-cannot connect to the local ZenML server.
+orchestrator, that cannot directly connect to the local ZenML server.
 
 For example, to start the dashboard on port 9000 and have it listen
 on all locally available interfaces on your machine, run:
@@ -996,6 +1018,12 @@ or
 zenml user delete USER_NAME
 ```
 
+A freshly created user will by default be assigned the admin role. This
+behavior can be overwritten:
+```bash
+zenml user create USER_NAME --role guest
+```
+
 To see a list of all users, run:
 ```bash
 zenml user list
@@ -1026,16 +1054,27 @@ To see a list of all teams, run:
 zenml team list
 ```
 
-A role groups permissions and can be assigned to users or teams. To create or
-delete a role, run one of the following commands:
+A role groups permissions to resources. Currently, there are the following
+globally scoped roles to choose from: 'write', 'read' and 'me'. To create
+a role, run one of the following commands:
 ```bash
-zenml role create ROLE_NAME
+zenml role create ROLE_NAME -p write -p read -p me
+zenml role create ROLE_NAME -p read
+```
+
+To delete a role run:
+```bash
 zenml role delete ROLE_NAME
 ```
 
 To see a list of all roles, run:
 ```bash
 zenml role list
+```
+
+You can also update the role name and the attached permissions of a role:
+```bash
+zenml role update [-n <NEW_NAME>| -r <PERMISSION_TO_REMOVE>| -a <PERMISSION_TO_ADD>]
 ```
 
 If you want to assign or revoke a role from users or teams, you can run
@@ -1056,6 +1095,10 @@ You can see a list of all current role assignments by running:
 zenml role assignment list
 ```
 
+At any point you may inspect all available permissions:
+```bash
+zenml permission list
+```
 
 Deploying ZenML to the cloud
 ----------------------------
@@ -1099,11 +1142,13 @@ stack recipe(s). Use the `-p` or `--path` flag.
 ```bash
 zenml stack recipe pull <stack-recipe-name> --path=<PATH>
 ```
-By default, all recipes get downloaded under a directory called `zenml_stack_recipes`.
+By default, all recipes get downloaded under a directory called
+`zenml_stack_recipes`.
 
 To deploy a recipe, use the `deploy` command. Before running deploy, review the 
 `zenml_stack_recipes/<stack-recipe-name>/locals.tf` file for configuring
-non-sensitive variables and the `zenml_stack_recipes/<stack-recipe-name>/values.tfvars`
+non-sensitive variables and the
+`zenml_stack_recipes/<stack-recipe-name>/values.tfvars`
 file to add sensitive information like access keys and passwords.
 
 ```bash
@@ -1146,6 +1191,7 @@ This deletes all the recipes from the default path where they were downloaded.
 """
 
 from zenml.cli.annotator import *  # noqa
+from zenml.cli.artifact import *  # noqa
 from zenml.cli.base import *  # noqa
 from zenml.cli.config import *  # noqa
 from zenml.cli.example import *  # noqa
@@ -1153,7 +1199,8 @@ from zenml.cli.feature import *  # noqa
 from zenml.cli.integration import *  # noqa
 from zenml.cli.model import *  # noqa
 from zenml.cli.pipeline import *  # noqa
-from zenml.cli.profile import *  # noqa
+from zenml.cli.project import *  # noqa
+from zenml.cli.role import *  # noqa
 from zenml.cli.secret import *  # noqa
 from zenml.cli.server import *  # noqa
 from zenml.cli.stack import *  # noqa

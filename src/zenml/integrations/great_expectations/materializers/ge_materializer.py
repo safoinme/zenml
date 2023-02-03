@@ -29,9 +29,11 @@ from great_expectations.data_context.types.base import (  # type: ignore[import]
 from great_expectations.data_context.types.resource_identifiers import (  # type: ignore[import]
     ValidationResultIdentifier,
 )
-from great_expectations.types import SerializableDictDot  # type: ignore[import]
+from great_expectations.types import (  # type: ignore[import]
+    SerializableDictDot,
+)
 
-from zenml.artifacts import DataAnalysisArtifact
+from zenml.enums import ArtifactType
 from zenml.materializers.base_materializer import BaseMaterializer
 from zenml.utils import yaml_utils
 from zenml.utils.source_utils import import_class_by_path
@@ -46,7 +48,7 @@ class GreatExpectationsMaterializer(BaseMaterializer):
         ExpectationSuite,
         CheckpointResult,
     )
-    ASSOCIATED_ARTIFACT_TYPES = (DataAnalysisArtifact,)
+    ASSOCIATED_ARTIFACT_TYPE = ArtifactType.DATA_ANALYSIS
 
     @staticmethod
     def preprocess_checkpoint_result_dict(
@@ -85,7 +87,7 @@ class GreatExpectationsMaterializer(BaseMaterializer):
             validation_dict[validation_ident] = validation_results
         artifact_dict["run_results"] = validation_dict
 
-    def handle_input(self, data_type: Type[Any]) -> SerializableDictDot:
+    def load(self, data_type: Type[Any]) -> SerializableDictDot:
         """Reads and returns a Great Expectations object.
 
         Args:
@@ -94,8 +96,8 @@ class GreatExpectationsMaterializer(BaseMaterializer):
         Returns:
             A loaded Great Expectations object.
         """
-        super().handle_input(data_type)
-        filepath = os.path.join(self.artifact.uri, ARTIFACT_FILENAME)
+        super().load(data_type)
+        filepath = os.path.join(self.uri, ARTIFACT_FILENAME)
         artifact_dict = yaml_utils.read_json(filepath)
         data_type = import_class_by_path(artifact_dict.pop("data_type"))
 
@@ -104,14 +106,14 @@ class GreatExpectationsMaterializer(BaseMaterializer):
 
         return data_type(**artifact_dict)
 
-    def handle_return(self, obj: SerializableDictDot) -> None:
+    def save(self, obj: SerializableDictDot) -> None:
         """Writes a Great Expectations object.
 
         Args:
             obj: A Great Expectations object.
         """
-        super().handle_return(obj)
-        filepath = os.path.join(self.artifact.uri, ARTIFACT_FILENAME)
+        super().save(obj)
+        filepath = os.path.join(self.uri, ARTIFACT_FILENAME)
         artifact_dict = obj.to_json_dict()
         artifact_type = type(obj)
         artifact_dict[

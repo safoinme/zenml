@@ -33,7 +33,7 @@ from zenml.enums import AnalyticsEventSource
 from zenml.exceptions import GitNotFoundError, InitializationException
 from zenml.io import fileio
 from zenml.logger import get_logger
-from zenml.utils.analytics_utils import AnalyticsEvent, track_event
+from zenml.utils.analytics_utils import AnalyticsEvent, event_handler
 from zenml.utils.io_utils import copy_dir, get_global_config_directory
 
 logger = get_logger(__name__)
@@ -164,7 +164,9 @@ def clean(ctx: click.Context, yes: bool = False, local: bool = False) -> None:
         local_zen_repo_config = Path.cwd() / REPOSITORY_DIRECTORY_NAME
         if fileio.exists(str(local_zen_repo_config)):
             fileio.rmtree(str(local_zen_repo_config))
-            declare(f"Deleted local ZenML config from {local_zen_repo_config}.")
+            declare(
+                f"Deleted local ZenML config from {local_zen_repo_config}."
+            )
 
         # delete the zen store and all other files and directories used by ZenML
         # to persist information locally (e.g. artifacts)
@@ -193,7 +195,7 @@ def clean(ctx: click.Context, yes: bool = False, local: bool = False) -> None:
 
 @cli.command("go")
 def go() -> None:
-    """Quickly explore ZenML with this walkthrough.
+    """Quickly explore ZenML with this walk-through.
 
     Raises:
         GitNotFoundError: If git is not installed.
@@ -219,54 +221,59 @@ def go() -> None:
         gave_email = _prompt_email()
         metadata = {"gave_email": gave_email}
 
-    # Add telemetry
-    track_event(AnalyticsEvent.RUN_ZENML_GO, metadata=metadata)
+    with event_handler(event=AnalyticsEvent.RUN_ZENML_GO, metadata=metadata):
 
-    console.print(zenml_go_privacy_message, width=80)
+        console.print(zenml_go_privacy_message, width=80)
 
-    zenml_tutorial_path = os.path.join(os.getcwd(), "zenml_tutorial")
+        zenml_tutorial_path = os.path.join(os.getcwd(), "zenml_tutorial")
 
-    if not os.path.isdir(zenml_tutorial_path):
-        try:
-            from git.repo.base import Repo
-        except ImportError as e:
-            logger.error(
-                "At this point we would want to clone our tutorial repo onto "
-                "your machine to let you dive right into our code. However, "
-                "this machine has no installation of Git. Feel free to install "
-                "git and rerun this command. Alternatively you can also "
-                f"download the repo manually here: {TUTORIAL_REPO}. The "
-                f"tutorial is in the 'examples/quickstart/notebooks' directory."
-            )
-            raise GitNotFoundError(e)
-
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            tmp_cloned_dir = os.path.join(tmpdirname, "zenml_repo")
-            with console.status(
-                "Cloning tutorial. This sometimes takes a minute..."
-            ):
-                Repo.clone_from(
-                    TUTORIAL_REPO,
-                    tmp_cloned_dir,
-                    branch=f"release/{zenml_version}",
+        if not os.path.isdir(zenml_tutorial_path):
+            try:
+                from git.repo.base import Repo
+            except ImportError as e:
+                logger.error(
+                    "At this point we would want to clone our tutorial repo "
+                    "onto your machine to let you dive right into our code. "
+                    "However, this machine has no installation of Git. Feel "
+                    "free to install git and rerun this command. Alternatively "
+                    "you can also download the repo manually here: "
+                    f"{TUTORIAL_REPO}. The tutorial is in the "
+                    f"'examples/quickstart/notebooks' directory."
                 )
-            example_dir = os.path.join(tmp_cloned_dir, "examples/quickstart")
-            copy_dir(example_dir, zenml_tutorial_path)
-    else:
-        logger.warning(
-            f"{zenml_tutorial_path} already exists! Continuing without cloning."
+                raise GitNotFoundError(e)
+
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                tmp_cloned_dir = os.path.join(tmpdirname, "zenml_repo")
+                with console.status(
+                    "Cloning tutorial. This sometimes takes a minute..."
+                ):
+                    Repo.clone_from(
+                        TUTORIAL_REPO,
+                        tmp_cloned_dir,
+                        branch=f"release/{zenml_version}",
+                    )
+                example_dir = os.path.join(
+                    tmp_cloned_dir, "examples/quickstart"
+                )
+                copy_dir(example_dir, zenml_tutorial_path)
+        else:
+            logger.warning(
+                f"{zenml_tutorial_path} already exists! Continuing without "
+                "cloning."
+            )
+
+        # get list of all .ipynb files in zenml_tutorial_path
+        ipynb_files = []
+        for dirpath, _, filenames in os.walk(zenml_tutorial_path):
+            for filename in filenames:
+                if filename.endswith(".ipynb"):
+                    ipynb_files.append(os.path.join(dirpath, filename))
+
+        ipynb_files.sort()
+        console.print(
+            zenml_go_notebook_tutorial_message(ipynb_files), width=80
         )
-
-    # get list of all .ipynb files in zenml_tutorial_path
-    ipynb_files = []
-    for dirpath, _, filenames in os.walk(zenml_tutorial_path):
-        for filename in filenames:
-            if filename.endswith(".ipynb"):
-                ipynb_files.append(os.path.join(dirpath, filename))
-
-    ipynb_files.sort()
-    console.print(zenml_go_notebook_tutorial_message(ipynb_files), width=80)
-    input("Press ENTER to continue...")
+        input("Press ENTER to continue...")
     notebook_path = os.path.join(zenml_tutorial_path, "notebooks")
     subprocess.check_call(["jupyter", "notebook"], cwd=notebook_path)
 
@@ -296,15 +303,16 @@ def _prompt_email() -> bool:
 
             # For now, hard-code to ZENML GO as the source
             GlobalConfiguration().record_email_opt_in_out(
-                opted_in=True, email=email, source=AnalyticsEventSource.ZENML_GO
+                opted_in=True,
+                email=email,
+                source=AnalyticsEventSource.ZENML_GO,
             )
 
             # Add consent and email to user model
-
-            client.zen_store.user_email_opt_in(
-                client.active_user.id,
-                user_opt_in_response=True,
-                email=email,
+            client.update_user(
+                user_name_or_id=client.active_user.id,
+                updated_email=email,
+                updated_email_opt_in=True,
             )
             return True
     else:
@@ -313,8 +321,9 @@ def _prompt_email() -> bool:
         )
 
         # This is the case where user opts out
-        client.zen_store.user_email_opt_in(
-            client.active_user.id, user_opt_in_response=False
+        client.update_user(
+            client.active_user.id,
+            updated_email_opt_in=False,
         )
 
     return False

@@ -12,13 +12,12 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Implementation of the post-execution pipeline."""
-
 from typing import TYPE_CHECKING, Any, List, Optional, Type, Union
 from uuid import UUID
 
 from zenml.client import Client
 from zenml.logger import get_apidocs_link, get_logger
-from zenml.models import PipelineModel
+from zenml.models import PipelineResponseModel, PipelineRunFilterModel
 from zenml.post_execution.pipeline_run import PipelineRunView
 from zenml.utils.analytics_utils import AnalyticsEvent, track
 
@@ -38,15 +37,15 @@ def get_pipelines() -> List["PipelineView"]:
     """
     # TODO: [server] handle the active stack correctly
     client = Client()
-    pipelines = client.zen_store.list_pipelines(
-        project_name_or_id=client.active_project.id
-    )
-    return [PipelineView(model) for model in pipelines]
+    pipelines = client.list_pipelines(project_id=client.active_project.id)
+    return [PipelineView(model) for model in pipelines.items]
 
 
 @track(event=AnalyticsEvent.GET_PIPELINE)
 def get_pipeline(
-    pipeline: Optional[Union["BasePipeline", Type["BasePipeline"], str]] = None,
+    pipeline: Optional[
+        Union["BasePipeline", Type["BasePipeline"], str]
+    ] = None,
     **kwargs: Any,
 ) -> Optional["PipelineView"]:
     """Fetches a post-execution pipeline view.
@@ -116,21 +115,26 @@ def get_pipeline(
 
     client = Client()
     active_project_id = client.active_project.id
-    assert active_project_id is not None
-    try:
-        pipeline_model = client.zen_store.get_pipeline_in_project(
-            pipeline_name=pipeline_name,
-            project_name_or_id=active_project_id,
+
+    pipeline_models = client.list_pipelines(
+        name=pipeline_name,
+        project_id=active_project_id,
+    )
+    if pipeline_models.total == 1:
+        return PipelineView(pipeline_models.items[0])
+    elif pipeline_models.total > 1:
+        raise RuntimeError(
+            f"Pipeline_name `{pipeline_name}` not unique within Project "
+            f"`{active_project_id}`."
         )
-        return PipelineView(pipeline_model)
-    except KeyError:
+    else:
         return None
 
 
 class PipelineView:
     """Post-execution pipeline class."""
 
-    def __init__(self, model: PipelineModel):
+    def __init__(self, model: PipelineResponseModel):
         """Initializes a post-execution pipeline object.
 
         In most cases `PipelineView` objects should not be created manually
@@ -184,8 +188,26 @@ class PipelineView:
         return self._model.spec
 
     @property
+    def num_runs(self) -> int:
+        """Returns the number of runs of this pipeline.
+
+        Returns:
+            The number of runs of this pipeline.
+        """
+        active_project_id = Client().active_project.id
+        return (
+            Client()
+            .zen_store.list_runs(
+                PipelineRunFilterModel(
+                    project_id=active_project_id, pipeline_id=self._model.id
+                )
+            )
+            .total
+        )
+
+    @property
     def runs(self) -> List["PipelineRunView"]:
-        """Returns all stored runs of this pipeline.
+        """Returns the last 50 stored runs of this pipeline.
 
         The runs are returned in chronological order, so the latest
         run will be the last element in this list.
@@ -195,11 +217,13 @@ class PipelineView:
         """
         # Do not cache runs as new runs might appear during this objects
         # lifecycle
-        runs = Client().zen_store.list_runs(
-            project_name_or_id=self._model.project,
-            pipeline_id=self._model.id,
+        active_project_id = Client().active_project.id
+
+        runs = Client().list_runs(
+            project_id=active_project_id, pipeline_id=self._model.id, size=50
         )
-        return [PipelineRunView(run) for run in runs]
+
+        return [PipelineRunView(run) for run in runs.items]
 
     def get_run_for_completed_step(self, step_name: str) -> "PipelineRunView":
         """Ascertains which pipeline run produced the cached artifact of a given step.

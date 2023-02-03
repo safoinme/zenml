@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, cast
 
 from kfp import dsl
 from kfp_tekton.compiler import TektonCompiler
+from kfp_tekton.compiler.pipeline_utils import TektonPipelineConf
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 
@@ -38,7 +39,9 @@ from zenml.orchestrators import BaseOrchestrator
 from zenml.orchestrators.utils import get_orchestrator_run_name
 from zenml.stack import StackValidator
 from zenml.utils import io_utils, networking_utils
-from zenml.utils.pipeline_docker_image_builder import PipelineDockerImageBuilder
+from zenml.utils.pipeline_docker_image_builder import (
+    PipelineDockerImageBuilder,
+)
 
 if TYPE_CHECKING:
     from zenml.config.base_settings import BaseSettings
@@ -157,7 +160,10 @@ class TektonOrchestrator(BaseOrchestrator):
             return True, ""
 
         return StackValidator(
-            required_components={StackComponentType.CONTAINER_REGISTRY},
+            required_components={
+                StackComponentType.CONTAINER_REGISTRY,
+                StackComponentType.IMAGE_BUILDER,
+            },
             custom_validation_function=_validate,
         )
 
@@ -173,7 +179,7 @@ class TektonOrchestrator(BaseOrchestrator):
             stack: The stack on which the pipeline will be deployed.
         """
         docker_image_builder = PipelineDockerImageBuilder()
-        repo_digest = docker_image_builder.build_and_push_docker_image(
+        repo_digest = docker_image_builder.build_docker_image(
             deployment=deployment, stack=stack
         )
         deployment.add_extra(ORCHESTRATOR_DOCKER_IMAGE_KEY, repo_digest)
@@ -265,10 +271,9 @@ class TektonOrchestrator(BaseOrchestrator):
                 )
 
                 settings = cast(
-                    Optional[TektonOrchestratorSettings],
-                    self.get_settings(step),
+                    TektonOrchestratorSettings, self.get_settings(step)
                 )
-                if settings and settings.pod_settings:
+                if settings.pod_settings:
                     apply_pod_settings(
                         container_op=container_op,
                         settings=settings.pod_settings,
@@ -311,7 +316,18 @@ class TektonOrchestrator(BaseOrchestrator):
             "_component_human_name",
             orchestrator_run_name,
         )
-        TektonCompiler().compile(_construct_kfp_pipeline, pipeline_file_path)
+        pipeline_config = TektonPipelineConf()
+        pipeline_config.add_pipeline_label(
+            "pipelines.kubeflow.org/cache_enabled", "false"
+        )
+        TektonCompiler().compile(
+            _construct_kfp_pipeline,
+            pipeline_file_path,
+            tekton_pipeline_conf=pipeline_config,
+        )
+        logger.info(
+            "Writing Tekton workflow definition to `%s`.", pipeline_file_path
+        )
 
         if deployment.schedule:
             logger.warning(

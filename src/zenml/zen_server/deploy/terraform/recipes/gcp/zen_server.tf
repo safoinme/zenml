@@ -31,10 +31,6 @@ resource "helm_release" "zen-server" {
     name  = "zenml.deploymentType"
     value = "gcp"
   }
-  set {
-    name  = "zenml.serverId"
-    value = var.server_id
-  }
   
   # set up the right path for ZenML
   set {
@@ -50,7 +46,7 @@ resource "helm_release" "zen-server" {
     value = var.ingress_path != ""? "/$1": ""
   }
   set {
-    name = "ingress.host"
+    name = "zenml.ingress.host"
     value = var.create_ingress_controller? "${data.kubernetes_service.ingress-controller[0].status.0.load_balancer.0.ingress.0.ip}.nip.io" : "${var.ingress_controller_hostname}.nip.io"
   }
   set {

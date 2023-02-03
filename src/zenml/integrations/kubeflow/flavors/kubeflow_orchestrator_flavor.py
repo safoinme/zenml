@@ -20,12 +20,14 @@ from pydantic import root_validator
 from zenml.config.base_settings import BaseSettings
 from zenml.integrations.kubeflow import KUBEFLOW_ORCHESTRATOR_FLAVOR
 from zenml.integrations.kubernetes.pod_settings import KubernetesPodSettings
+from zenml.logger import get_logger
 from zenml.orchestrators import BaseOrchestratorConfig, BaseOrchestratorFlavor
-from zenml.utils.deprecation_utils import deprecate_pydantic_attributes
+from zenml.utils.secret_utils import SecretField
 
 if TYPE_CHECKING:
     from zenml.integrations.kubeflow.orchestrators import KubeflowOrchestrator
 
+logger = get_logger(__name__)
 
 DEFAULT_KFP_UI_PORT = 8080
 
@@ -34,7 +36,16 @@ class KubeflowOrchestratorSettings(BaseSettings):
     """Settings for the Kubeflow orchestrator.
 
     Attributes:
+        synchronous: If `True`, running a pipeline using this orchestrator will
+            block until all steps finished running on KFP. This setting only
+            has an effect when specified on the pipeline and will be ignored if
+            specified on steps.
+        timeout: How many seconds to wait for synchronous runs.
         client_args: Arguments to pass when initializing the KFP client.
+        client_username: Username to generate a session cookie for the kubeflow client. Both `client_username`
+        and `client_password` need to be set together.
+        client_password: Password to generate a session cookie for the kubeflow client. Both `client_username`
+        and `client_password` need to be set together.
         user_namespace: The user namespace to use when creating experiments
             and runs.
         node_selectors: Deprecated: Node selectors to apply to KFP pods.
@@ -42,18 +53,33 @@ class KubeflowOrchestratorSettings(BaseSettings):
         pod_settings: Pod settings to apply.
     """
 
+    synchronous: bool = False
+    timeout: int = 1200
+
     client_args: Dict[str, Any] = {}
+    client_username: Optional[str] = SecretField()
+    client_password: Optional[str] = SecretField()
     user_namespace: Optional[str] = None
     node_selectors: Dict[str, str] = {}
     node_affinity: Dict[str, List[str]] = {}
     pod_settings: Optional[KubernetesPodSettings] = None
 
-    _deprecation_validator = deprecate_pydantic_attributes(
-        "node_selectors", "node_affinity"
-    )
-
     @root_validator
-    def _migrate_pod_settings(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_and_migrate_pod_settings(
+        cls, values: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Validates settings and migrates pod settings from older version.
+
+        Args:
+            values: Dict representing user-specified runtime settings.
+
+        Returns:
+            Validated settings.
+
+        Raises:
+            AssertionError: If old and new settings are used together.
+            ValueError: If username and password are not specified together.
+        """
         has_pod_settings = bool(values.get("pod_settings"))
 
         node_selectors = cast(
@@ -64,6 +90,13 @@ class KubeflowOrchestratorSettings(BaseSettings):
         )
 
         has_old_settings = any([node_selectors, node_affinity])
+
+        if has_old_settings:
+            logger.warning(
+                "The attributes `node_selectors` and `node_affinity` of the "
+                "Kubeflow settings will be deprecated soon. Use the "
+                "attribute `pod_settings` instead.",
+            )
 
         if has_pod_settings and has_old_settings:
             raise AssertionError(
@@ -104,10 +137,21 @@ class KubeflowOrchestratorSettings(BaseSettings):
             values["node_affinity"] = {}
             values["node_selectors"] = {}
 
+        # Validate username and password for auth cookie logic
+        username = values.get("client_username")
+        password = values.get("client_password")
+        client_creds_error = "`client_username` and `client_password` both need to be set together."
+        if username and password is None:
+            raise ValueError(client_creds_error)
+        if password and username is None:
+            raise ValueError(client_creds_error)
+
         return values
 
 
-class KubeflowOrchestratorConfig(BaseOrchestratorConfig):
+class KubeflowOrchestratorConfig(  # type: ignore[misc] # https://github.com/pydantic/pydantic/issues/4173
+    BaseOrchestratorConfig, KubeflowOrchestratorSettings
+):
     """Configuration for the Kubeflow orchestrator.
 
     Attributes:
@@ -120,24 +164,34 @@ class KubeflowOrchestratorConfig(BaseOrchestratorConfig):
             Pipelines is deployed. Defaults to `kubeflow`.
         kubernetes_context: Optional name of a kubernetes context to run
             pipelines in. If not set, will try to spin up a local K3d cluster.
-        synchronous: If `True`, running a pipeline using this orchestrator will
-            block until all steps finished running on KFP.
         skip_local_validations: If `True`, the local validations will be
             skipped.
         skip_cluster_provisioning: If `True`, the k3d cluster provisioning will
             be skipped.
         skip_ui_daemon_provisioning: If `True`, provisioning the KFP UI daemon
             will be skipped.
+        container_registry_name: The name of the container registry stack
+            component to use. If not specified, the container registry
+            in the active stack is used.
     """
 
     kubeflow_pipelines_ui_port: int = DEFAULT_KFP_UI_PORT
     kubeflow_hostname: Optional[str] = None
     kubeflow_namespace: str = "kubeflow"
-    kubernetes_context: Optional[str] = None
-    synchronous: bool = False
+    kubernetes_context: Optional[str] = None  # TODO: Potential setting
     skip_local_validations: bool = False
     skip_cluster_provisioning: bool = False
     skip_ui_daemon_provisioning: bool = False
+
+    # IMPORTANT: This is a temporary solution to allow the Kubeflow orchestrator
+    # to be provisioned as an individual component (i.e. same as running
+    # `zenml orchestrator kubeflow up`) rather than needing it to be part of the
+    # active stack (i.e. instead of running `zenml stack up`). This is required
+    # by the test framework because the way it works is that it first provisions
+    # the stack components individually, then each test gets a different stack
+    # with the components it requires.
+    # Do not use for anything else! This will be removed in the near future.
+    container_registry_name: Optional[str] = None
 
     @property
     def is_remote(self) -> bool:

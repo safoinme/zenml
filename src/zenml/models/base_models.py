@@ -12,23 +12,45 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Base domain model definitions."""
-
 from datetime import datetime
-from typing import Any
-from uuid import UUID, uuid4
+from typing import TYPE_CHECKING, Any, Dict, Type, TypeVar, Union
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from zenml.utils.analytics_utils import AnalyticsTrackedModelMixin
+
+if TYPE_CHECKING:
+    from zenml.models.project_models import ProjectResponseModel
+    from zenml.models.user_models import UserResponseModel
 
 
-class DomainModel(BaseModel):
+# --------------- #
+# RESPONSE MODELS #
+# --------------- #
+
+
+class BaseResponseModel(AnalyticsTrackedModelMixin):
     """Base domain model.
 
     Used as a base class for all domain models that have the following common
     characteristics:
 
-      * are uniquely identified by an UUID
+      * are uniquely identified by a UUID
       * have a creation timestamp and a last modified timestamp
     """
+
+    id: UUID = Field(title="The unique resource id.")
+
+    created: datetime = Field(title="Time when this resource was created.")
+    updated: datetime = Field(
+        title="Time when this resource was last updated."
+    )
+
+    class Config:
+        """Allow extras on Response Models."""
+
+        extra = "allow"
 
     def __hash__(self) -> int:
         """Implementation of hash magic method.
@@ -47,40 +69,141 @@ class DomainModel(BaseModel):
         Returns:
             True if the other object is of the same type and has the same UUID.
         """
-        return self.id == other.id if isinstance(other, DomainModel) else False
+        if isinstance(other, BaseResponseModel):
+            return self.id == other.id
+        else:
+            return False
 
-    id: UUID = Field(default_factory=uuid4, title="The unique resource id.")
-    created: datetime = Field(
-        default_factory=datetime.now,
-        title="Time when this resource was created.",
-    )
-    updated: datetime = Field(
-        default_factory=datetime.now,
-        title="Time when this resource was last updated.",
-    )
+    def get_analytics_metadata(self) -> Dict[str, Any]:
+        """Fetches the analytics metadata for base response models.
+
+        Returns:
+            The analytics metadata.
+        """
+        metadata = super().get_analytics_metadata()
+        metadata["entity_id"] = self.id
+        return metadata
 
 
-class UserOwnedDomainModel(DomainModel):
+class UserScopedResponseModel(BaseResponseModel):
     """Base user-owned domain model.
 
     Used as a base class for all domain models that are "owned" by a user.
     """
 
-    user: UUID = Field(
-        title="The id of the user that created this resource.",
+    user: Union["UserResponseModel", None] = Field(
+        title="The user that created this resource.", nullable=True
     )
 
+    def get_analytics_metadata(self) -> Dict[str, Any]:
+        """Fetches the analytics metadata for user scoped models.
 
-class ProjectScopedDomainModel(UserOwnedDomainModel):
+        Returns:
+            The analytics metadata.
+        """
+        metadata = super().get_analytics_metadata()
+        if self.user is not None:
+            metadata["user_id"] = self.user.id
+        return metadata
+
+
+class ProjectScopedResponseModel(UserScopedResponseModel):
     """Base project-scoped domain model.
+
+    Used as a base class for all domain models that are project-scoped.
+    """
+
+    project: "ProjectResponseModel" = Field(
+        title="The project of this resource."
+    )
+
+    def get_analytics_metadata(self) -> Dict[str, Any]:
+        """Fetches the analytics metadata for project scoped models.
+
+        Returns:
+            The analytics metadata.
+        """
+        metadata = super().get_analytics_metadata()
+        metadata["project_id"] = self.project.id
+        return metadata
+
+
+class ShareableResponseModel(ProjectScopedResponseModel):
+    """Base shareable project-scoped domain model.
+
+    Used as a base class for all domain models that are project-scoped and are
+    shareable.
+    """
+
+    is_shared: bool = Field(
+        title=(
+            "Flag describing if this resource is shared with other users in "
+            "the same project."
+        ),
+    )
+
+    def get_analytics_metadata(self) -> Dict[str, Any]:
+        """Fetches the analytics metadata for project scoped models.
+
+        Returns:
+            The analytics metadata.
+        """
+        metadata = super().get_analytics_metadata()
+        metadata["is_shared"] = self.is_shared
+        return metadata
+
+
+# -------------- #
+# REQUEST MODELS #
+# -------------- #
+
+
+class BaseRequestModel(AnalyticsTrackedModelMixin):
+    """Base request model.
+
+    Used as a base class for all request models.
+    """
+
+
+class UserScopedRequestModel(BaseRequestModel):
+    """Base user-owned request model.
+
+    Used as a base class for all domain models that are "owned" by a user.
+    """
+
+    user: UUID = Field(title="The id of the user that created this resource.")
+
+    def get_analytics_metadata(self) -> Dict[str, Any]:
+        """Fetches the analytics metadata for user scoped models.
+
+        Returns:
+            The analytics metadata.
+        """
+        metadata = super().get_analytics_metadata()
+        metadata["user_id"] = self.user
+        return metadata
+
+
+class ProjectScopedRequestModel(UserScopedRequestModel):
+    """Base project-scoped request domain model.
 
     Used as a base class for all domain models that are project-scoped.
     """
 
     project: UUID = Field(title="The project to which this resource belongs.")
 
+    def get_analytics_metadata(self) -> Dict[str, Any]:
+        """Fetches the analytics metadata for project scoped models.
 
-class ShareableProjectScopedDomainModel(ProjectScopedDomainModel):
+        Returns:
+            The analytics metadata.
+        """
+        metadata = super().get_analytics_metadata()
+        metadata["project_id"] = self.project
+        return metadata
+
+
+class ShareableRequestModel(ProjectScopedRequestModel):
     """Base shareable project-scoped domain model.
 
     Used as a base class for all domain models that are project-scoped and are
@@ -94,3 +217,39 @@ class ShareableProjectScopedDomainModel(ProjectScopedDomainModel):
             "the same project."
         ),
     )
+
+    def get_analytics_metadata(self) -> Dict[str, Any]:
+        """Fetches the analytics metadata for project scoped models.
+
+        Returns:
+            The analytics metadata.
+        """
+        metadata = super().get_analytics_metadata()
+        metadata["is_shared"] = self.is_shared
+        return metadata
+
+
+# ------------- #
+# UPDATE MODELS #
+# ------------- #
+
+T = TypeVar("T", bound="BaseRequestModel")
+
+
+def update_model(_cls: Type[T]) -> Type[T]:
+    """Base update model.
+
+    This is used as a decorator on top of request models to convert them
+    into update models where the fields are optional and can be set to None.
+
+    Args:
+        _cls: The class to decorate
+
+    Returns:
+        The decorated class.
+    """
+    for _, value in _cls.__fields__.items():
+        value.required = False
+        value.allow_none = True
+
+    return _cls

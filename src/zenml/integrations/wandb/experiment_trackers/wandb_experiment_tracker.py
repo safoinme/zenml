@@ -51,7 +51,7 @@ class WandbExperimentTracker(BaseExperimentTracker):
 
     @property
     def settings_class(self) -> Optional[Type["BaseSettings"]]:
-        """settings class for the Wandb experiment tracker.
+        """Settings class for the Wandb experiment tracker.
 
         Returns:
             The settings class.
@@ -66,8 +66,7 @@ class WandbExperimentTracker(BaseExperimentTracker):
         """
         os.environ[WANDB_API_KEY] = self.config.api_key
         settings = cast(
-            WandbExperimentTrackerSettings,
-            self.get_settings(info) or WandbExperimentTrackerSettings(),
+            WandbExperimentTrackerSettings, self.get_settings(info)
         )
 
         tags = settings.tags + [info.run_name, info.pipeline.name]
@@ -78,13 +77,14 @@ class WandbExperimentTracker(BaseExperimentTracker):
             run_name=wandb_run_name, tags=tags, settings=settings.settings
         )
 
-    def cleanup_step_run(self, info: "StepRunInfo") -> None:
+    def cleanup_step_run(self, info: "StepRunInfo", step_failed: bool) -> None:
         """Stops the Wandb run.
 
         Args:
             info: Info about the step that was executed.
+            step_failed: Whether the step failed or not.
         """
-        wandb.finish()
+        wandb.finish(exit_code=1) if step_failed else wandb.finish()
         os.environ.pop(WANDB_API_KEY, None)
 
     def _initialize_wandb(

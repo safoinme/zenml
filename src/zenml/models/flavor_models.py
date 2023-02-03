@@ -11,40 +11,98 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""Model definitions for stack component flavors."""
+"""Models representing stack component flavors."""
 
-from typing import ClassVar, List, Optional
+from typing import ClassVar, List, Optional, Union
+from uuid import UUID
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from zenml.enums import StackComponentType
-from zenml.models.base_models import ProjectScopedDomainModel
-from zenml.utils.analytics_utils import AnalyticsTrackedModelMixin
+from zenml.models.base_models import (
+    ProjectScopedRequestModel,
+    ProjectScopedResponseModel,
+)
+from zenml.models.constants import STR_FIELD_MAX_LENGTH, TEXT_FIELD_MAX_LENGTH
+from zenml.models.filter_models import ProjectScopedFilterModel
+
+# ---- #
+# BASE #
+# ---- #
 
 
-class FlavorModel(ProjectScopedDomainModel, AnalyticsTrackedModelMixin):
-    """Domain model representing the custom implementation of a flavor."""
+class FlavorBaseModel(BaseModel):
+    """Base model for stack component flavors."""
+
+    name: str = Field(
+        title="The name of the Flavor.",
+        max_length=STR_FIELD_MAX_LENGTH,
+    )
+    type: StackComponentType = Field(title="The type of the Flavor.")
+    config_schema: str = Field(
+        title="The JSON schema of this flavor's corresponding configuration.",
+        max_length=TEXT_FIELD_MAX_LENGTH,
+    )
+    source: str = Field(
+        title="The path to the module which contains this Flavor.",
+        max_length=STR_FIELD_MAX_LENGTH,
+    )
+    integration: Optional[str] = Field(
+        title="The name of the integration that the Flavor belongs to.",
+        max_length=STR_FIELD_MAX_LENGTH,
+    )
+
+
+# -------- #
+# RESPONSE #
+# -------- #
+
+
+class FlavorResponseModel(FlavorBaseModel, ProjectScopedResponseModel):
+    """Response model for stack component flavors."""
 
     ANALYTICS_FIELDS: ClassVar[List[str]] = [
         "id",
         "type",
         "integration",
-        "project",
-        "user",
     ]
 
+
+# ------ #
+# FILTER #
+# ------ #
+
+
+class FlavorFilterModel(ProjectScopedFilterModel):
+    """Model to enable advanced filtering of all Flavors."""
+
     name: str = Field(
-        title="The name of the Flavor.",
+        default=None,
+        description="Name of the flavor",
     )
-    type: StackComponentType = Field(
-        title="The type of the Flavor.",
+    type: str = Field(
+        default=None,
+        description="Stack Component Type of the stack flavor",
     )
-    config_schema: str = Field(
-        title="The JSON schema of this flavor's corresponding configuration."
+    integration: str = Field(
+        default=None,
+        description="Integration associated with the flavor",
     )
-    source: str = Field(
-        title="The path to the module which contains this Flavor."
+    project_id: Union[UUID, str] = Field(
+        default=None, description="Project of the stack"
     )
-    integration: Optional[str] = Field(
-        title="The name of the integration that the Flavor belongs to."
-    )
+    user_id: Union[UUID, str] = Field(None, description="User of the stack")
+
+
+# ------- #
+# REQUEST #
+# ------- #
+
+
+class FlavorRequestModel(FlavorBaseModel, ProjectScopedRequestModel):
+    """Request model for stack component flavors."""
+
+    ANALYTICS_FIELDS: ClassVar[List[str]] = [
+        "type",
+        "integration",
+    ]

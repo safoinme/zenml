@@ -58,7 +58,9 @@ class KServeDeploymentConfig(ServiceConfig):
         model_name: the name of the model. Multiple versions of the same model
             should use the same model name.
         secret_name: the name of the secret containing the model.
-        predictor: the KServe predictor used to serve the model.
+        predictor: the KServe predictor used to serve the model. The
+        predictor type can be one of the following: `tensorflow`, `pytorch`,
+        `sklearn`, `xgboost`, `custom`.
         replicas: number of replicas to use for the prediction service.
         resources: the Kubernetes resources to allocate for the prediction service.
         container: the container to use for the custom prediction services.
@@ -202,7 +204,8 @@ class KServeDeploymentService(BaseService):
         )
 
         return cast(
-            KServeModelDeployer, KServeModelDeployer.get_active_model_deployer()
+            KServeModelDeployer,
+            KServeModelDeployer.get_active_model_deployer(),
         )
 
     def _get_client(self) -> KServeClient:

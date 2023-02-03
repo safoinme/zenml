@@ -13,18 +13,20 @@
 #  permissions and limitations under the License.
 """Util functions for the ZenML Server."""
 
+import inspect
 import os
 from functools import wraps
-from typing import Any, Callable, List, Optional, TypeVar, cast
+from typing import Any, Callable, List, Optional, Type, TypeVar, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from zenml.config.global_config import GlobalConfiguration
 from zenml.constants import ENV_ZENML_SERVER_ROOT_URL_PATH
 from zenml.enums import StoreType
 from zenml.exceptions import (
     EntityExistsError,
+    IllegalOperationError,
     NotAuthorizedError,
     StackComponentExistsError,
     StackExistsError,
@@ -112,6 +114,18 @@ def not_authorized(error: Exception) -> HTTPException:
     return HTTPException(status_code=401, detail=error_detail(error))
 
 
+def forbidden(error: Exception) -> HTTPException:
+    """Convert an Exception to a HTTP 403 response.
+
+    Args:
+        error: Exception to convert.
+
+    Returns:
+        HTTPException with status code 403.
+    """
+    return HTTPException(status_code=403, detail=error_detail(error))
+
+
 def not_found(error: Exception) -> HTTPException:
     """Convert an Exception to a HTTP 404 response.
 
@@ -178,8 +192,47 @@ def handle_exceptions(func: F) -> F:
         ) as error:
             logger.exception("Entity already exists")
             raise conflict(error) from error
+        except IllegalOperationError as error:
+            logger.exception("Illegal operation")
+            raise forbidden(error) from error
         except ValueError as error:
             logger.exception("Validation error")
             raise unprocessable(error) from error
 
     return cast(F, decorated)
+
+
+# Code from https://github.com/tiangolo/fastapi/issues/1474#issuecomment-1160633178
+# to send 422 response when receiving invalid query parameters
+def make_dependable(cls: Type[BaseModel]) -> Callable[..., Any]:
+    """This function makes a pydantic model usable for fastapi query parameters.
+
+    Additionally, it converts `InternalServerError`s that would happen due to
+    `pydantic.ValidationError` into 422 responses that signal an invalid
+    request.
+
+    Check out https://github.com/tiangolo/fastapi/issues/1474 for context.
+
+    Usage:
+        def f(model: Model = Depends(make_dependable(Model))):
+            ...
+
+    Args:
+        cls: The model class.
+
+    Returns:
+        Function to use in FastAPI `Depends`.
+    """
+
+    def init_cls_and_handle_errors(*args: Any, **kwargs: Any) -> BaseModel:
+        try:
+            inspect.signature(init_cls_and_handle_errors).bind(*args, **kwargs)
+            return cls(*args, **kwargs)
+        except ValidationError as e:
+            for error in e.errors():
+                error["loc"] = tuple(["query"] + list(error["loc"]))
+            raise HTTPException(422, detail=e.errors())
+
+    init_cls_and_handle_errors.__signature__ = inspect.signature(cls)  # type: ignore[attr-defined]
+
+    return init_cls_and_handle_errors

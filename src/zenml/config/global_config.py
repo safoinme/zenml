@@ -16,9 +16,10 @@
 import json
 import os
 import uuid
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from secrets import token_hex
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from uuid import UUID
 
 from packaging import version
 from pydantic import BaseModel, Field, ValidationError, validator
@@ -39,13 +40,14 @@ from zenml.utils import io_utils, yaml_utils
 from zenml.utils.analytics_utils import (
     AnalyticsEvent,
     AnalyticsGroup,
+    event_handler,
     identify_group,
     identify_user,
     track_event,
 )
 
 if TYPE_CHECKING:
-    from zenml.models.project_models import ProjectModel
+    from zenml.models import ProjectResponseModel, StackResponseModel
     from zenml.zen_stores.base_zen_store import BaseZenStore
 
 logger = get_logger(__name__)
@@ -136,7 +138,9 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
         _config_path: Directory where the global config file is stored.
     """
 
-    user_id: uuid.UUID = Field(default_factory=uuid.uuid4, allow_mutation=False)
+    user_id: uuid.UUID = Field(
+        default_factory=uuid.uuid4, allow_mutation=False
+    )
     user_email: Optional[str] = None
     user_email_opt_in: Optional[bool] = None
     analytics_opt_in: bool = True
@@ -148,12 +152,12 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
 
     _config_path: str
     _zen_store: Optional["BaseZenStore"] = None
-    _active_project: Optional["ProjectModel"] = None
+    _active_project: Optional["ProjectResponseModel"] = None
 
     def __init__(
         self, config_path: Optional[str] = None, **kwargs: Any
     ) -> None:
-        """Initializes a GlobalConfiguration object using values from the config file.
+        """Initializes a GlobalConfiguration using values from the config file.
 
         GlobalConfiguration is a singleton class: only one instance can exist.
         Calling this constructor multiple times will always yield the same
@@ -230,12 +234,14 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
             # If the version parsing fails, it returns a `LegacyVersion`
             # instead. Check to make sure it's an actual `Version` object
             # which represents a valid version.
-            raise RuntimeError(f"Invalid version in global configuration: {v}.")
+            raise RuntimeError(
+                f"Invalid version in global configuration: {v}."
+            )
 
         return v
 
     def __setattr__(self, key: str, value: Any) -> None:
-        """Sets an attribute on the config and persists the new value in the global configuration.
+        """Sets an attribute and persists it in the global configuration.
 
         Args:
             key: The attribute name.
@@ -308,8 +314,8 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
                     config_version,
                     curr_version,
                 )
-                # TODO [ENG-899]: Give more detailed instruction on how to resolve
-                #  version mismatch.
+                # TODO [ENG-899]: Give more detailed instruction on how to
+                #  resolve version mismatch.
                 return
 
             if config_version == curr_version:
@@ -348,8 +354,8 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
         """Writes the global configuration options to disk.
 
         Args:
-            config_path: custom config file path. When not specified, the default
-                global configuration path is used.
+            config_path: custom config file path. When not specified, the
+                default global configuration path is used.
         """
         config_file = self._config_file(config_path)
         yaml_dict = json.loads(self.json(exclude_none=True))
@@ -371,7 +377,7 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
         """Configure the global zen store.
 
         This method creates and initializes the global store according to the
-        the supplied configuration.
+        supplied configuration.
 
         Args:
             config: The new store configuration to use.
@@ -392,19 +398,21 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
             # We want to check if the active user has opted in or out for using
             # an email address for marketing purposes and if so, record it in
             # the analytics.
-            active_user = store.active_user
+            active_user = store.get_user(include_private=True)
             if active_user.email_opted_in is not None:
                 self.record_email_opt_in_out(
                     opted_in=active_user.email_opted_in,
                     email=active_user.email,
                     source=AnalyticsEventSource.ZENML_SERVER,
                 )
-
             self._zen_store = store
 
             # Sanitize the global configuration to reflect the new store
             self._sanitize_config()
             self._write_config()
+
+            local_stores_path = Path(self.local_stores_path)
+            local_stores_path.mkdir(parents=True, exist_ok=True)
 
     def _sanitize_config(self) -> None:
         """Sanitize and save the global configuration.
@@ -417,8 +425,9 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
             self.active_stack_id,
             config_name="global",
         )
-        self.set_active_project(active_project)
-        self.active_stack_id = active_stack.id
+        self.active_project_name = active_project.name
+        self._active_project = active_project
+        self.set_active_stack(active_stack)
 
     @staticmethod
     def default_config_directory() -> str:
@@ -448,7 +457,7 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
         store_config: Optional[StoreConfiguration] = None,
         empty_store: bool = False,
     ) -> "GlobalConfiguration":
-        """Create a copy of the global config using a different configuration path.
+        """Create a copy of the global config using a different config path.
 
         This method is used to copy the global configuration and store it in a
         different configuration path, where it can be loaded in the context of a
@@ -488,19 +497,24 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
         self._write_config(config_path)
         config_copy = GlobalConfiguration(config_path=config_path)
 
+        store: Optional[StoreConfiguration] = None
+
         if store_config is not None:
-            config_copy.store = store_config
+            store = store_config
 
         elif empty_store or self.uses_default_store():
-            config_copy.store = None
+            store = None
 
         elif self.store:
-            store_class = BaseZenStore.get_store_class(self.store.type)
+            store_config_class = BaseZenStore.get_store_config_class(
+                self.store.type
+            )
 
-            store_config_copy = store_class.CONFIG_TYPE.copy_configuration(
+            store_config_copy = store_config_class.copy_configuration(
                 self.store, config_path, load_config_path
             )
-            config_copy.store = store_config_copy
+            store = store_config_copy
+        config_copy.store = store
 
         return config_copy
 
@@ -543,6 +557,11 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
             if k.startswith(ENV_ZENML_STORE_PREFIX):
                 env_config[k[len(ENV_ZENML_STORE_PREFIX) :].lower()] = v
         if len(env_config):
+            if "type" not in env_config and "url" in env_config:
+                env_config["type"] = BaseZenStore.get_store_type(
+                    env_config["url"]
+                )
+
             logger.debug(
                 "Using environment variables to configure the default store"
             )
@@ -561,13 +580,15 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
         Call this method to initialize or revert the store configuration to the
         default store.
         """
-        default_store_cfg = self.get_default_store()
-        self._configure_store(default_store_cfg)
-        logger.info("Using the default store for the global config.")
-        track_event(
-            AnalyticsEvent.INITIALIZED_STORE,
-            {"store_type": default_store_cfg.type.value},
-        )
+        with event_handler(
+            AnalyticsEvent.INITIALIZED_STORE
+        ) as analytics_handler:
+            default_store_cfg = self.get_default_store()
+            self._configure_store(default_store_cfg)
+            logger.info("Using the default store for the global config.")
+            analytics_handler.metadata = {
+                "store_type": default_store_cfg.type.value
+            }
 
     def uses_default_store(self) -> bool:
         """Check if the global configuration uses the default store.
@@ -597,32 +618,36 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
             **kwargs: Additional keyword arguments to pass to the store
                 constructor.
         """
-        self._configure_store(config, skip_default_registrations, **kwargs)
-        logger.info("Updated the global store configuration.")
+        with event_handler(
+            event=AnalyticsEvent.INITIALIZED_STORE,
+            metadata={"store_type": config.type.value},
+        ):
+            self._configure_store(config, skip_default_registrations, **kwargs)
+            logger.info("Updated the global store configuration.")
 
-        if self.zen_store.type == StoreType.REST:
-            # Every time a client connects to a ZenML server, we want to
-            # group the client ID and the server ID together. This records
-            # only that a particular client has successfully connected to a
-            # particular server at least once, but no information about the
-            # user account is recorded here.
-            server_info = self.zen_store.get_store_info()
+            if self.zen_store.type == StoreType.REST:
+                # Every time a client connects to a ZenML server, we want to
+                # group the client ID and the server ID together. This records
+                # only that a particular client has successfully connected to a
+                # particular server at least once, but no information about the
+                # user account is recorded here.
 
-            identify_group(
-                AnalyticsGroup.ZENML_SERVER_GROUP,
-                group_id=str(server_info.id),
-                group_metadata={
-                    "version": server_info.version,
-                    "deployment_type": str(server_info.deployment_type),
-                    "database_type": str(server_info.database_type),
-                },
-            )
+                with event_handler(
+                    event=AnalyticsEvent.ZENML_SERVER_CONNECTED
+                ):
+                    server_info = self.zen_store.get_store_info()
 
-            track_event(AnalyticsEvent.ZENML_SERVER_CONNECTED)
-
-        track_event(
-            AnalyticsEvent.INITIALIZED_STORE, {"store_type": config.type.value}
-        )
+                    identify_group(
+                        AnalyticsGroup.ZENML_SERVER_GROUP,
+                        group_id=str(server_info.id),
+                        group_metadata={
+                            "version": server_info.version,
+                            "deployment_type": str(
+                                server_info.deployment_type
+                            ),
+                            "database_type": str(server_info.database_type),
+                        },
+                    )
 
     @property
     def zen_store(self) -> "BaseZenStore":
@@ -643,46 +668,80 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
 
         return self._zen_store
 
-    @property
-    def active_project(self) -> "ProjectModel":
-        """Get the currently active project of the local client.
-
-        Returns:
-            The active project.
-
-        Raises:
-            RuntimeError: If no project is active.
-        """
-        if (
-            self._active_project
-            and self._active_project.name != self.active_project_name
-        ):
-            # in case someone tries to set the active project name directly
-            # outside of this class
-            self._active_project = None
-        if not self._active_project:
-            if not self.active_project_name:
-                raise RuntimeError(
-                    "No active project is configured. Run "
-                    "`zenml project set PROJECT_NAME` to set the active "
-                    "project."
-                )
-            self._active_project = self.zen_store.get_project(
-                project_name_or_id=self.active_project_name
-            )
-        return self._active_project
-
-    def set_active_project(self, project: "ProjectModel") -> None:
+    def set_active_project(
+        self, project: "ProjectResponseModel"
+    ) -> "ProjectResponseModel":
         """Set the project for the local client.
 
         Args:
             project: The project to set active.
+
+        Returns:
+            The project that was set active.
         """
         self.active_project_name = project.name
         self._active_project = project
+        # Sanitize the global configuration to reflect the new project
+        self._sanitize_config()
+        return project
+
+    def set_active_stack(self, stack: "StackResponseModel") -> None:
+        """Set the active stack for the local client.
+
+        Args:
+            stack: The model of the stack to set active.
+        """
+        self.active_stack_id = stack.id
+
+    def get_active_project(self) -> "ProjectResponseModel":
+        """Get a model of the active project for the local client.
+
+        Returns:
+            The model of the active project.
+        """
+        project_name = self.get_active_project_name()
+
+        if self._active_project is not None:
+            return self._active_project
+
+        project = self.zen_store.get_project(
+            project_name_or_id=project_name,
+        )
+        return self.set_active_project(project)
+
+    def get_active_project_name(self) -> str:
+        """Get the name of the active project.
+
+        If the active project doesn't exist yet, the ZenStore is reinitialized.
+
+        Returns:
+            The name of the active project.
+        """
+        if self.active_project_name is None:
+            _ = self.zen_store
+            assert self.active_project_name is not None
+
+        return self.active_project_name
+
+    def get_active_stack_id(self) -> UUID:
+        """Get the ID of the active stack.
+
+        If the active stack doesn't exist yet, the ZenStore is reinitialized.
+
+        Returns:
+            The active stack ID.
+        """
+        if self.active_stack_id is None:
+            _ = self.zen_store
+            assert self.active_stack_id is not None
+
+        return self.active_stack_id
 
     def record_email_opt_in_out(
-        self, opted_in: bool, email: Optional[str], source: AnalyticsEventSource
+        self,
+        opted_in: bool,
+        email: Optional[str],
+        source: AnalyticsEventSource,
     ) -> None:
         """Set the email address associated with this client.
 
@@ -708,7 +767,6 @@ class GlobalConfiguration(BaseModel, metaclass=GlobalConfigMetaClass):
             or opted_in
             and not self.user_email_opt_in
         ):
-
             # When the user opts out giving the email for the first time, or
             # when the user opts in after opting out (e.g. when connecting to
             # a new server where the account has opt-in enabled), we want to

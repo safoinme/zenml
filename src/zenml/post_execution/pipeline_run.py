@@ -14,13 +14,15 @@
 """Implementation of the post-execution pipeline run class."""
 
 from collections import OrderedDict
+from datetime import datetime
+from functools import partial
 from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from zenml.client import Client
 from zenml.enums import ExecutionStatus
 from zenml.logger import get_apidocs_link, get_logger
-from zenml.models import PipelineRunModel
+from zenml.models import PipelineRunResponseModel
 from zenml.post_execution.step import StepView
 
 logger = get_logger(__name__)
@@ -41,23 +43,23 @@ def get_run(name: str) -> "PipelineRunView":
     """
     client = Client()
     active_project_id = client.active_project.id
-    runs = client.zen_store.list_runs(
-        run_name=name,
-        project_name_or_id=active_project_id,
+    runs = client.list_runs(
+        name=name,
+        project_id=active_project_id,
     )
 
     # TODO: [server] this error handling could be improved
     if not runs:
         raise KeyError(f"No run with name '{name}' exists.")
-    elif len(runs) > 1:
+    elif runs.total > 1:
         raise RuntimeError(
             f"Multiple runs have been found for name  '{name}'.", runs
         )
-    return PipelineRunView(runs[0])
+    return PipelineRunView(runs.items[0])
 
 
 def get_unlisted_runs() -> List["PipelineRunView"]:
-    """Fetches post-execution views of all unlisted runs.
+    """Fetches post-execution views the most recent 50 unlisted runs.
 
     Unlisted runs are runs that are not associated with any pipeline.
 
@@ -65,11 +67,10 @@ def get_unlisted_runs() -> List["PipelineRunView"]:
         A list of post-execution run views.
     """
     client = Client()
-    runs = client.zen_store.list_runs(
-        project_name_or_id=client.active_project.id,
-        unlisted=True,
+    runs = client.list_runs(
+        project_id=client.active_project.id, unlisted=True, size=50
     )
-    return [PipelineRunView(model) for model in runs]
+    return [PipelineRunView(model) for model in runs.items]
 
 
 class PipelineRunView:
@@ -79,7 +80,7 @@ class PipelineRunView:
     pipeline execution.
     """
 
-    def __init__(self, model: PipelineRunModel):
+    def __init__(self, model: PipelineRunResponseModel):
         """Initializes a post-execution pipeline run object.
 
         In most cases `PipelineRunView` objects should not be created manually
@@ -120,6 +121,15 @@ class PipelineRunView:
         return self._model.pipeline_configuration
 
     @property
+    def schedule_id(self) -> Optional[UUID]:
+        """Returns the ID of the schedule that triggered this pipeline run.
+
+        Returns:
+            The ID of the schedule that triggered this pipeline run.
+        """
+        return self._model.schedule_id
+
+    @property
     def settings(self) -> Dict[str, Any]:
         """Returns the pipeline settings.
 
@@ -146,14 +156,15 @@ class PipelineRunView:
         return cast(Dict[str, Any], extra)
 
     @property
-    def enable_cache(self) -> bool:
+    def enable_cache(self) -> Optional[bool]:
         """Returns whether caching is enabled for this pipeline run.
 
         Returns:
             True if caching is enabled for this pipeline run.
         """
-        enable_cache = self.pipeline_configuration["enable_cache"]
-        return cast(bool, enable_cache)
+        from zenml.pipelines.base_pipeline import PARAM_ENABLE_CACHE
+
+        return self.pipeline_configuration.get(PARAM_ENABLE_CACHE)
 
     @property
     def zenml_version(self) -> Optional[str]:
@@ -163,6 +174,24 @@ class PipelineRunView:
             The version of ZenML that this pipeline run was performed with.
         """
         return self._model.zenml_version
+
+    @property
+    def client_environment(self) -> Dict[str, str]:
+        """Environment of the client that initiated this pipeline run.
+
+        Returns:
+            The environment of the client that initiated this pipeline run.
+        """
+        return self._model.client_environment
+
+    @property
+    def orchestrator_environment(self) -> Dict[str, str]:
+        """Environment of the orchestrator that executed this pipeline run.
+
+        Returns:
+            The environment of the orchestrator that executed this pipeline run.
+        """
+        return self._model.orchestrator_environment
 
     @property
     def git_sha(self) -> Optional[str]:
@@ -185,7 +214,16 @@ class PipelineRunView:
         """
         # Query the run again since the status might have changed since this
         # object was created.
-        return Client().zen_store.get_run(self.id).status
+        return Client().get_pipeline_run(self.id).status
+
+    @property
+    def created(self) -> datetime:
+        """Returns the creation time of the pipeline run.
+
+        Returns:
+            The creation time of the pipeline run.
+        """
+        return self._model.created
 
     @property
     def steps(self) -> List[StepView]:
@@ -280,7 +318,11 @@ class PipelineRunView:
             return
 
         assert self._model.id is not None
-        steps = Client().zen_store.list_run_steps(self._model.id)
+        client = Client()
+        steps = client.depaginate(
+            partial(client.list_run_steps, pipeline_run_id=self._model.id)
+        )
+
         self._steps = {step.name: StepView(step) for step in steps}
 
     def __repr__(self) -> str:

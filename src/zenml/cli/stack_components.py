@@ -15,7 +15,7 @@
 
 import time
 from importlib import import_module
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import click
 from rich.markdown import Markdown
@@ -26,15 +26,18 @@ from zenml.cli.cli import TagGroup, cli
 from zenml.cli.feature import register_feature_store_subcommands
 from zenml.cli.model import register_model_deployer_subcommands
 from zenml.cli.secret import register_secrets_manager_subcommands
-from zenml.cli.utils import _component_display_name
+from zenml.cli.utils import (
+    _component_display_name,
+    list_options,
+    print_page_info,
+)
 from zenml.client import Client
 from zenml.console import console
 from zenml.enums import CliCategories, StackComponentType
+from zenml.exceptions import IllegalOperationError
 from zenml.io import fileio
-from zenml.utils.analytics_utils import AnalyticsEvent, track_event
-
-if TYPE_CHECKING:
-    pass
+from zenml.models import ComponentFilterModel
+from zenml.utils.analytics_utils import AnalyticsEvent, track
 
 
 def generate_stack_component_get_command(
@@ -51,19 +54,22 @@ def generate_stack_component_get_command(
 
     def get_stack_component_command() -> None:
         """Prints the name of the active component."""
-        cli_utils.print_active_config()
-        cli_utils.print_active_stack()
-
-        active_stack = Client().active_stack_model
-        components = active_stack.components.get(component_type, None)
+        client = Client()
         display_name = _component_display_name(component_type)
-        if components:
-            cli_utils.declare(f"Active {display_name}: '{components[0].name}'")
-        else:
-            cli_utils.warning(
-                f"No {display_name} set for active stack "
-                f"('{active_stack.name}')."
-            )
+
+        with console.status(f"Getting the active `{display_name}`...\n"):
+            active_stack = client.active_stack_model
+            components = active_stack.components.get(component_type, None)
+
+            if components:
+                cli_utils.declare(
+                    f"Active {display_name}: '{components[0].name}'"
+                )
+            else:
+                cli_utils.warning(
+                    f"No {display_name} set for active stack "
+                    f"('{active_stack.name}')."
+                )
 
     return get_stack_component_command
 
@@ -81,50 +87,37 @@ def generate_stack_component_describe_command(
     """
 
     @click.argument(
-        "name_or_id",
+        "name_id_or_prefix",
         type=str,
         required=False,
     )
-    def describe_stack_component_command(name_or_id: str) -> None:
+    def describe_stack_component_command(name_id_or_prefix: str) -> None:
         """Prints details about the active/specified component.
 
         Args:
-            name_or_id: Name or id of the component to describe.
+            name_id_or_prefix: Name or id of the component to describe.
         """
-        cli_utils.print_active_config()
-        cli_utils.print_active_stack()
-
         client = Client()
+        try:
+            component_ = client.get_stack_component(
+                name_id_or_prefix=name_id_or_prefix,
+                component_type=component_type,
+            )
+        except KeyError as err:
+            cli_utils.error(str(err))
 
-        active_component = client.active_stack_model.components.get(
-            component_type, []
-        )
+        with console.status(f"Describing component '{component_.name}'..."):
+            active_component_id = None
+            active_components = client.active_stack_model.components.get(
+                component_type, None
+            )
+            if active_components:
+                active_component_id = active_components[0].id
 
-        if name_or_id:
-            try:
-                component = cli_utils.get_component_by_id_or_name_or_prefix(
-                    client=client,
-                    component_type=component_type,
-                    id_or_name_or_prefix=name_or_id,
-                )
-            except KeyError as e:
-                cli_utils.error(str(e))  # noqa
-        else:
-            if len(active_component) == 0:
-                cli_utils.error(
-                    f"Cannot describe any {component_type} since the active "
-                    f"stack has no {component_type} and no name or id was "
-                    f"provided."
-                )
-            component = active_component[0]
-
-        is_active = (
-            len(active_component) > 0 and component.id == active_component[0].id
-        )
-
-        cli_utils.print_stack_component_configuration(
-            component=component.to_hydrated_model(), active_status=is_active
-        )
+            cli_utils.print_stack_component_configuration(
+                component=component_,
+                active_status=component_.id == active_component_id,
+            )
 
     return describe_stack_component_command
 
@@ -141,21 +134,23 @@ def generate_stack_component_list_command(
         A function that can be used as a `click` command.
     """
 
-    def list_stack_components_command() -> None:
+    @list_options(ComponentFilterModel)
+    def list_stack_components_command(**kwargs: Any) -> None:
         """Prints a table of stack components."""
-        cli_utils.print_active_config()
-        cli_utils.print_active_stack()
-
         client = Client()
+        with console.status(f"Listing {component_type.plural}..."):
+            kwargs["type"] = component_type
+            components = client.list_stack_components(**kwargs)
+            if not components:
+                cli_utils.declare("No components found for the given filters.")
+                return
 
-        components = client.list_stack_components_by_type(component_type)
-        hydrated_comps = [s.to_hydrated_model() for s in components]
-
-        cli_utils.print_components_table(
-            client=client,
-            component_type=component_type,
-            components=hydrated_comps,
-        )
+            cli_utils.print_components_table(
+                client=client,
+                component_type=component_type,
+                components=components.items,
+            )
+            print_page_info(components)
 
     return list_stack_components_command
 
@@ -207,40 +202,30 @@ def generate_stack_component_register_command(
             share: Share the stack with other users.
             args: Additional arguments to pass to the component.
         """
+        client = Client()
+
         # Parse the given args
         # name is guaranteed to be set by parse_name_and_extra_arguments
         name, parsed_args = cli_utils.parse_name_and_extra_arguments(  # type: ignore[assignment]
             list(args) + [name], expand_args=True
         )
 
+        # click<8.0.0 gives flags a default of None
+        if share is None:
+            share = False
+
         with console.status(f"Registering {display_name} '{name}'...\n"):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
-            client = Client()
-
-            # click<8.0.0 gives flags a default of None
-            if share is None:
-                share = False
-
             # Create a new stack component model
-            from zenml.models import ComponentModel
-
-            component_create_model = ComponentModel(
-                user=client.active_user.id,
-                project=client.active_project.id,
-                is_shared=share,
+            component = client.create_stack_component(
                 name=name,
                 flavor=flavor,
+                component_type=component_type,
                 configuration=parsed_args,
-                type=component_type,
+                is_shared=share,
             )
 
-            # Register the new model
-            client = Client()
-            client.register_stack_component(component_create_model)
-
             cli_utils.declare(
-                f"Successfully registered {display_name} `{name}`."
+                f"Successfully registered {component.type} `{component.name}`."
             )
 
     return register_stack_component_command
@@ -260,73 +245,46 @@ def generate_stack_component_update_command(
     display_name = _component_display_name(component_type)
 
     @click.argument(
-        "name_or_id",
+        "name_id_or_prefix",
         type=str,
         required=False,
     )
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
     def update_stack_component_command(
-        name_or_id: Optional[str], args: List[str]
+        name_id_or_prefix: Optional[str], args: List[str]
     ) -> None:
         """Updates a stack component.
 
         Args:
-            name_or_id: The name or id of the stack component to update.
+            name_id_or_prefix: The name or id of the stack component to update.
             args: Additional arguments to pass to the update command.
         """
-        args = list(args)
-        if name_or_id:
-            args.append(name_or_id)
+        client = Client()
+
         # Parse the given args
+        args = list(args)
+        if name_id_or_prefix:
+            args.append(name_id_or_prefix)
+
         name_or_id, parsed_args = cli_utils.parse_name_and_extra_arguments(
             args,
             expand_args=True,
             name_mandatory=False,
         )
 
-        cli_utils.print_active_config()
-        cli_utils.print_active_stack()
-
-        client = Client()
-        if not name_or_id:
-            cli_utils.declare(
-                f"No name or id was provided. Trying to update the active "
-                f"{display_name}."
-            )
-            active_stack = client.active_stack_model
-            if component_type not in active_stack.components:
-                cli_utils.error(
-                    f"The active stack has no {display_name} and no name or id "
-                    f"was provided."
-                )
-            name_or_id = str(active_stack.components[component_type][0].id)
-
-        with console.status(f"Updating {display_name} '{name_or_id}'...\n"):
-
-            # Get the existing component
-            existing_component = (
-                cli_utils.get_component_by_id_or_name_or_prefix(
-                    client=client,
+        with console.status(f"Updating {display_name}...\n"):
+            try:
+                updated_component = client.update_stack_component(
+                    name_id_or_prefix=name_or_id,
                     component_type=component_type,
-                    id_or_name_or_prefix=name_or_id,
+                    configuration=parsed_args,
                 )
-            )
-
-            # Update the existing configuration
-            updated_attributes = {
-                **existing_component.configuration,
-                **parsed_args,
-            }
-
-            # Update the component
-            client.update_stack_component(
-                component=existing_component.copy(
-                    update={"configuration": updated_attributes}
-                )
-            )
+            except KeyError as err:
+                cli_utils.error(str(err))
 
             cli_utils.declare(
-                f"Successfully updated {display_name} `{name_or_id}`."
+                f"Successfully updated {display_name} "
+                f"`{updated_component.name}`."
             )
 
     return update_stack_component_command
@@ -346,38 +304,35 @@ def generate_stack_component_share_command(
     display_name = _component_display_name(component_type)
 
     @click.argument(
-        "name_or_id",
+        "name_id_or_prefix",
         type=str,
         required=False,
     )
     def share_stack_component_command(
-        name_or_id: str,
+        name_id_or_prefix: str,
     ) -> None:
         """Shares a stack component.
 
         Args:
-            name_or_id: The name or id of the stack component to update.
+            name_id_or_prefix: The name or id of the stack component to update.
         """
-        with console.status(f"Updating {display_name} '{name_or_id}'...\n"):
-            cli_utils.print_active_config()
+        client = Client()
 
-            # Get the existing component
-            client = Client()
-            existing_component = (
-                cli_utils.get_component_by_id_or_name_or_prefix(
-                    client=client,
+        with console.status(
+            f"Updating {display_name} '{name_id_or_prefix}'...\n"
+        ):
+            try:
+                client.update_stack_component(
+                    name_id_or_prefix=name_id_or_prefix,
                     component_type=component_type,
-                    id_or_name_or_prefix=name_or_id,
+                    is_shared=True,
                 )
-            )
-
-            existing_component.is_shared = True
-
-            # Update the component
-            client.update_stack_component(component=existing_component)
+            except (KeyError, IllegalOperationError) as err:
+                cli_utils.error(str(err))
 
             cli_utils.declare(
-                f"Successfully shared {display_name} " f"`{name_or_id}`."
+                f"Successfully shared {display_name} "
+                f"`{name_id_or_prefix}`."
             )
 
     return share_stack_component_command
@@ -397,53 +352,37 @@ def generate_stack_component_remove_attribute_command(
     display_name = _component_display_name(component_type)
 
     @click.argument(
-        "name_or_id",
+        "name_id_or_prefix",
         type=str,
         required=True,
     )
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
     def remove_attribute_stack_component_command(
-        name_or_id: str, args: List[str]
+        name_id_or_prefix: str, args: List[str]
     ) -> None:
         """Removes one or more attributes from a stack component.
 
         Args:
-            name_or_id: The name of the stack component to remove the
+            name_id_or_prefix: The name of the stack component to remove the
                 attribute from.
             args: Additional arguments to pass to the remove_attribute command.
         """
-        with console.status(f"Updating {display_name} '{name_or_id}'...\n"):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
+        client = Client()
 
-            # Parse the given args
-            parsed_args = cli_utils.parse_unknown_component_attributes(args)
-
-            # Fetch the existing component
-            client = Client()
-
-            existing_comp = cli_utils.get_component_by_id_or_name_or_prefix(
-                client=client,
-                component_type=component_type,
-                id_or_name_or_prefix=name_or_id,
-            )
-
-            # Remove the specified attributes
-            for arg in parsed_args:
-                try:
-                    existing_comp.configuration.pop(arg)
-                except KeyError:
-                    cli_utils.error(
-                        f"Cannot remove non-existent attribute '{arg}' from "
-                        f"{existing_comp.type} '{existing_comp.name}'"
-                        f"."
-                    )
-
-            # Update the stack component
-            client.update_stack_component(component=existing_comp)
+        with console.status(
+            f"Updating {display_name} '{name_id_or_prefix}'...\n"
+        ):
+            try:
+                client.update_stack_component(
+                    name_id_or_prefix=name_id_or_prefix,
+                    component_type=component_type,
+                    configuration={k: None for k in args},
+                )
+            except (KeyError, IllegalOperationError) as err:
+                cli_utils.error(str(err))
 
             cli_utils.declare(
-                f"Successfully updated {display_name} `{name_or_id}`."
+                f"Successfully updated {display_name} `{name_id_or_prefix}`."
             )
 
     return remove_attribute_stack_component_command
@@ -463,7 +402,7 @@ def generate_stack_component_rename_command(
     display_name = _component_display_name(component_type)
 
     @click.argument(
-        "name_or_id",
+        "name_id_or_prefix",
         type=str,
         required=True,
     )
@@ -472,34 +411,31 @@ def generate_stack_component_rename_command(
         type=str,
         required=True,
     )
-    def rename_stack_component_command(name_or_id: str, new_name: str) -> None:
+    def rename_stack_component_command(
+        name_id_or_prefix: str, new_name: str
+    ) -> None:
         """Rename a stack component.
 
         Args:
-            name_or_id: The name of the stack component to rename.
+            name_id_or_prefix: The name of the stack component to rename.
             new_name: The new name of the stack component.
         """
-        with console.status(f"Renaming {display_name} '{name_or_id}'...\n"):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
+        client = Client()
 
-            # Fetch the existing component
-            client = Client()
-            existing_component = (
-                cli_utils.get_component_by_id_or_name_or_prefix(
-                    client=client,
+        with console.status(
+            f"Renaming {display_name} '{name_id_or_prefix}'...\n"
+        ):
+            try:
+                client.update_stack_component(
+                    name_id_or_prefix=name_id_or_prefix,
                     component_type=component_type,
-                    id_or_name_or_prefix=name_or_id,
+                    name=new_name,
                 )
-            )
-
-            # Rename and update the existing component
-            client.update_stack_component(
-                component=existing_component.copy(update={"name": new_name}),
-            )
+            except (KeyError, IllegalOperationError) as err:
+                cli_utils.error(str(err))
 
             cli_utils.declare(
-                f"Successfully renamed {display_name} `{name_or_id}` to"
+                f"Successfully renamed {display_name} `{name_id_or_prefix}` to"
                 f" `{new_name}`."
             )
 
@@ -519,28 +455,26 @@ def generate_stack_component_delete_command(
     """
     display_name = _component_display_name(component_type)
 
-    @click.argument("name_or_id", type=str)
-    def delete_stack_component_command(name_or_id: str) -> None:
+    @click.argument("name_id_or_prefix", type=str)
+    def delete_stack_component_command(name_id_or_prefix: str) -> None:
         """Deletes a stack component.
 
         Args:
-            name_or_id: The name of the stack component to delete.
+            name_id_or_prefix: The name of the stack component to delete.
         """
-        with console.status(f"Deleting {display_name} '{name_or_id}'...\n"):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
+        client = Client()
 
-            # Fetch the existing stack component
-            client = Client()
-            existing_comp = cli_utils.get_component_by_id_or_name_or_prefix(
-                client=client,
-                component_type=component_type,
-                id_or_name_or_prefix=name_or_id,
-            )
-
-            # Delete the component
-            client.deregister_stack_component(existing_comp)
-            cli_utils.declare(f"Deleted {display_name}: {name_or_id}")
+        with console.status(
+            f"Deleting {display_name} '{name_id_or_prefix}'...\n"
+        ):
+            try:
+                client.deregister_stack_component(
+                    name_id_or_prefix=name_id_or_prefix,
+                    component_type=component_type,
+                )
+            except (KeyError, IllegalOperationError) as err:
+                cli_utils.error(str(err))
+            cli_utils.declare(f"Deleted {display_name}: {name_id_or_prefix}")
 
     return delete_stack_component_command
 
@@ -558,49 +492,43 @@ def generate_stack_component_copy_command(
     """
     display_name = _component_display_name(component_type)
 
-    @click.argument("source_component_name_or_id", type=str, required=True)
+    @click.argument(
+        "source_component_name_id_or_prefix", type=str, required=True
+    )
     @click.argument("target_component", type=str, required=True)
+    @track(AnalyticsEvent.COPIED_STACK_COMPONENT)
     def copy_stack_component_command(
-        source_component_name_or_id: str,
+        source_component_name_id_or_prefix: str,
         target_component: str,
     ) -> None:
         """Copies a stack component.
 
         Args:
-            source_component_name_or_id: Name or id prefix of the
+            source_component_name_id_or_prefix: Name or id prefix of the
                                          component to copy.
             target_component: Name of the copied component.
         """
-        track_event(AnalyticsEvent.COPIED_STACK_COMPONENT)
+        client = Client()
 
         with console.status(
-            f"Copying {display_name} " f"`{source_component_name_or_id}`..\n"
+            f"Copying {display_name} "
+            f"`{source_component_name_id_or_prefix}`..\n"
         ):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
-
-            # Fetch the stack component
-            client = Client()
-            existing_component = (
-                cli_utils.get_component_by_id_or_name_or_prefix(
-                    client=client,
+            try:
+                component_to_copy = client.get_stack_component(
+                    name_id_or_prefix=source_component_name_id_or_prefix,
                     component_type=component_type,
-                    id_or_name_or_prefix=source_component_name_or_id,
                 )
-            )
+            except KeyError as err:
+                cli_utils.error(str(err))
 
-            # Register a new one with a new name
-            from zenml.models import ComponentModel
-
-            component_create_model = ComponentModel(
-                user=client.active_user.id,
-                project=client.active_project.id,
+            client.create_stack_component(
                 name=target_component,
-                flavor=existing_component.flavor,
-                configuration=existing_component.configuration,
-                type=existing_component.type,
+                flavor=component_to_copy.flavor,
+                component_type=component_to_copy.type,
+                configuration=component_to_copy.configuration,
+                is_shared=component_to_copy.is_shared,
             )
-            client.register_stack_component(component=component_create_model)
 
     return copy_stack_component_command
 
@@ -616,61 +544,60 @@ def generate_stack_component_up_command(
     Returns:
         A function that can be used as a `click` command.
     """
+    display_name = _component_display_name(component_type)
 
-    @click.argument("name_or_id", type=str, required=False)
-    def up_stack_component_command(name_or_id: str) -> None:
+    @click.argument("name_id_or_prefix", type=str, required=False)
+    def up_stack_component_command(name_id_or_prefix: str) -> None:
         """Deploys a stack component locally.
 
         Args:
-            name_or_id: The name or_id of the stack component to deploy.
+            name_id_or_prefix: The name or_id of the stack component to deploy.
         """
-        cli_utils.print_active_config()
-        cli_utils.print_active_stack()
-
         client = Client()
 
-        try:
-            component_model = cli_utils.get_component_by_id_or_name_or_prefix(
-                client=client,
-                component_type=component_type,
-                id_or_name_or_prefix=name_or_id,
-            )
-        except KeyError as e:
-            cli_utils.error(str(e))  # noqa
-            return
-
-        from zenml.stack import StackComponent
-
-        component = StackComponent.from_model(component_model=component_model)
-
-        display_name = _component_display_name(component_type)
-
-        if component.is_running:
-            cli_utils.declare(
-                f"Local deployment is already running for {display_name} "
-                f"'{component.name}'."
-            )
-            return
-
-        if not component.is_provisioned:
-            cli_utils.declare(
-                f"Provisioning local resources for {display_name} "
-                f"'{component.name}'."
-            )
+        with console.status(
+            f"Provisioning {display_name} '{name_id_or_prefix}' locally...\n"
+        ):
             try:
-                component.provision()
-            except NotImplementedError:
-                cli_utils.error(
-                    f"Provisioning local resources not implemented for "
-                    f"{display_name} '{component.name}'."
+                component_model = client.get_stack_component(
+                    name_id_or_prefix=name_id_or_prefix,
+                    component_type=component_type,
                 )
+            except KeyError as err:
+                cli_utils.error(str(err))
 
-        if not component.is_running:
-            cli_utils.declare(
-                f"Resuming local resources for {display_name} "
-                f"'{component.name}'."
+            from zenml.stack import StackComponent
+
+            component = StackComponent.from_model(
+                component_model=component_model
             )
-            component.resume()
+
+            if component.is_running:
+                cli_utils.declare(
+                    f"Local deployment is already running for {display_name} "
+                    f"'{component.name}'."
+                )
+                return
+
+            if not component.is_provisioned:
+                cli_utils.declare(
+                    f"Provisioning local resources for {display_name} "
+                    f"'{component.name}'."
+                )
+                try:
+                    component.provision()
+                except NotImplementedError:
+                    cli_utils.error(
+                        f"Provisioning local resources not implemented for "
+                        f"{display_name} '{component.name}'."
+                    )
+
+            if not component.is_running:
+                cli_utils.declare(
+                    f"Resuming local resources for {display_name} "
+                    f"'{component.name}'."
+                )
+                component.resume()
 
     return up_stack_component_command
 
@@ -686,8 +613,9 @@ def generate_stack_component_down_command(
     Returns:
         A function that can be used as a `click` command.
     """
+    display_name = _component_display_name(component_type)
 
-    @click.argument("name_or_id", type=str, required=False)
+    @click.argument("name_id_or_prefix", type=str, required=False)
     @click.option(
         "--force",
         "-f",
@@ -695,85 +623,68 @@ def generate_stack_component_down_command(
         is_flag=True,
         help="Deprovisions local resources instead of suspending them.",
     )
-    @click.option(
-        "--yes",
-        "-y",
-        "old_force",
-        is_flag=True,
-        help="DEPRECATED: Deprovisions local resources instead of suspending "
-        "them. Use `-f/--force` instead.",
-    )
     def down_stack_component_command(
-        name_or_id: str,
+        name_id_or_prefix: str,
         force: bool = False,
-        old_force: bool = False,
     ) -> None:
         """Stops/Tears down the local deployment of a stack component.
 
         Args:
-            name_or_id: The name or id of the component to stop/deprovision.
+            name_id_or_prefix: The name or id of the component to
+                stop/deprovision.
             force: Deprovision local resources instead of suspending them.
-            old_force: DEPRECATED: Deprovision local resources instead of
-                suspending them. Use `-f/--force` instead.
         """
-        if old_force:
-            force = old_force
-            cli_utils.warning(
-                "The `--yes` flag will soon be deprecated. Use `--force` "
-                "or `-f` instead."
-            )
-        cli_utils.print_active_config()
-        cli_utils.print_active_stack()
-
         client = Client()
-        try:
-            component_model = cli_utils.get_component_by_id_or_name_or_prefix(
-                client=client,
-                component_type=component_type,
-                id_or_name_or_prefix=name_or_id,
-            )
-        except KeyError as e:
-            cli_utils.error(str(e))  # noqa
-            return
 
-        from zenml.stack import StackComponent
-
-        component = StackComponent.from_model(component_model=component_model)
-
-        display_name = _component_display_name(component_type)
-
-        if not force:
-            if not component.is_suspended:
-                cli_utils.declare(
-                    f"Suspending local resources for {display_name} "
-                    f"'{component.name}'."
+        with console.status(
+            f"De-provisioning {display_name} '{name_id_or_prefix}' locally...\n"
+        ):
+            try:
+                component_model = client.get_stack_component(
+                    name_id_or_prefix=name_id_or_prefix,
+                    component_type=component_type,
                 )
-                try:
-                    component.suspend()
-                except NotImplementedError:
-                    cli_utils.error(
-                        f"Provisioning local resources not implemented for "
-                        f"{display_name} '{component.name}'. If you want to "
-                        f"deprovision all resources for this component, use "
-                        f"the `--force/-f` flag."
+            except KeyError as err:
+                cli_utils.error(str(err))
+
+            from zenml.stack import StackComponent
+
+            component = StackComponent.from_model(
+                component_model=component_model
+            )
+
+            if not force:
+                if not component.is_suspended:
+                    cli_utils.declare(
+                        f"Suspending local resources for {display_name} "
+                        f"'{component.name}'."
+                    )
+                    try:
+                        component.suspend()
+                    except NotImplementedError:
+                        cli_utils.error(
+                            f"Provisioning local resources not implemented for "
+                            f"{display_name} '{component.name}'. If you want "
+                            f"to deprovision all resources for this component, "
+                            f"use the `--force/-f` flag."
+                        )
+                else:
+                    cli_utils.declare(
+                        f"No running resources found for {display_name} "
+                        f"'{component.name}'."
                     )
             else:
-                cli_utils.declare(
-                    f"No running resources found for {display_name} "
-                    f"'{component.name}'."
-                )
-        else:
-            if component.is_provisioned:
-                cli_utils.declare(
-                    f"Deprovisioning resources for {display_name} "
-                    f"'{component.name}'."
-                )
-                component.deprovision()
-            else:
-                cli_utils.declare(
-                    f"No provisioned resources found for {display_name} "
-                    f"'{component.name}'."
-                )
+                if component.is_provisioned:
+                    cli_utils.declare(
+                        f"Deprovisioning resources for {display_name} "
+                        f"'{component.name}'."
+                    )
+                    component.deprovision()
+                else:
+                    cli_utils.declare(
+                        f"No provisioned resources found for {display_name} "
+                        f"'{component.name}'."
+                    )
 
     return down_stack_component_command
 
@@ -789,8 +700,9 @@ def generate_stack_component_logs_command(
     Returns:
         A function that can be used as a `click` command.
     """
+    display_name = _component_display_name(component_type)
 
-    @click.argument("name_or_id", type=str, required=False)
+    @click.argument("name_id_or_prefix", type=str, required=False)
     @click.option(
         "--follow",
         "-f",
@@ -798,62 +710,69 @@ def generate_stack_component_logs_command(
         help="Follow the log file instead of just displaying the current logs.",
     )
     def stack_component_logs_command(
-        name_or_id: str, follow: bool = False
+        name_id_or_prefix: str, follow: bool = False
     ) -> None:
         """Displays stack component logs.
 
         Args:
-            name_or_id: The name of the stack component to display logs for.
+            name_id_or_prefix: The name of the stack component to display logs
+                for.
             follow: Follow the log file instead of just displaying the current
                 logs.
         """
-        cli_utils.print_active_config()
-        cli_utils.print_active_stack()
-
         client = Client()
-        try:
-            component_model = cli_utils.get_component_by_id_or_name_or_prefix(
-                client=client,
-                component_type=component_type,
-                id_or_name_or_prefix=name_or_id,
-            )
-        except KeyError as e:
-            cli_utils.error(str(e))  # noqa
-        else:
+
+        with console.status(
+            f"Fetching the logs for the {display_name} "
+            f"'{name_id_or_prefix}'...\n"
+        ):
+            try:
+                component_model = client.get_stack_component(
+                    name_id_or_prefix=name_id_or_prefix,
+                    component_type=component_type,
+                )
+            except KeyError as err:
+                cli_utils.error(str(err))
+
             from zenml.stack import StackComponent
 
             component = StackComponent.from_model(
                 component_model=component_model
             )
-
-            display_name = _component_display_name(component_type)
             log_file = component.log_file
 
             if not log_file or not fileio.exists(log_file):
                 cli_utils.warning(
                     f"Unable to find log file for {display_name} "
-                    f"'{component.name}'."
+                    f"'{name_id_or_prefix}'."
                 )
                 return
 
-            if follow:
-                try:
-                    with open(log_file, "r") as f:
-                        # seek to the end of the file
-                        f.seek(0, 2)
+        if not log_file or not fileio.exists(log_file):
+            cli_utils.warning(
+                f"Unable to find log file for {display_name} "
+                f"'{component.name}'."
+            )
+            return
 
-                        while True:
-                            line = f.readline()
-                            if not line:
-                                time.sleep(0.1)
-                                continue
-                            line = line.rstrip("\n")
-                            click.echo(line)
-                except KeyboardInterrupt:
-                    cli_utils.declare(f"Stopped following {display_name} logs.")
-            else:
+        if follow:
+            try:
                 with open(log_file, "r") as f:
-                    click.echo(f.read())
+                    # seek to the end of the file
+                    f.seek(0, 2)
+
+                    while True:
+                        line = f.readline()
+                        if not line:
+                            time.sleep(0.1)
+                            continue
+                        line = line.rstrip("\n")
+                        click.echo(line)
+            except KeyboardInterrupt:
+                cli_utils.declare(f"Stopped following {display_name} logs.")
+        else:
+            with open(log_file, "r") as f:
+                click.echo(f.read())
 
     return stack_component_logs_command
 
@@ -903,15 +822,11 @@ def generate_stack_component_flavor_list_command(
 
     def list_stack_component_flavor_command() -> None:
         """Lists the flavors for a single type of stack component."""
-        with console.status(f"Listing {display_name} flavors`...\n"):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
+        client = Client()
 
-            # Fetch the flavors
-            client = Client()
+        with console.status(f"Listing {display_name} flavors`...\n"):
             flavors = client.get_flavors_by_type(component_type=component_type)
 
-            # Print the flavors
             cli_utils.print_flavor_list(flavors=flavors)
 
     return list_stack_component_flavor_command
@@ -941,28 +856,14 @@ def generate_stack_component_flavor_register_command(
         Args:
             source: The source file to read the flavor from.
         """
+        client = Client()
+
         with console.status(f"Registering a new {display_name} flavor`...\n"):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
-
-            client = Client()
-
-            # Create a new model
-            # TODO: Investigate how we can create this model without empty
-            #   strings as values for name and config_schema
-            from zenml.models import FlavorModel
-
-            flavor_create_model = FlavorModel(
-                source=source,
-                type=component_type,
-                user=client.active_user.id,
-                project=client.active_project.id,
-                name="",
-                config_schema="",
-            )
-
             # Register the new model
-            new_flavor = client.create_flavor(flavor_create_model)
+            new_flavor = client.create_flavor(
+                source=source,
+                component_type=component_type,
+            )
 
             cli_utils.declare(
                 f"Successfully registered new flavor '{new_flavor.name}' "
@@ -996,10 +897,9 @@ def generate_stack_component_flavor_describe_command(
         Args:
             name: The name of the flavor.
         """
-        with console.status(f"Describing {display_name} flavor: {name}`...\n"):
-            # Fetch the existing flavor
-            client = Client()
+        client = Client()
 
+        with console.status(f"Describing {display_name} flavor: {name}`...\n"):
             flavor_model = client.get_flavor_by_name_and_type(
                 name=name, component_type=component_type
             )
@@ -1023,33 +923,24 @@ def generate_stack_component_flavor_delete_command(
     display_name = _component_display_name(component_type)
 
     @click.argument(
-        "name",
+        "name_or_id",
         type=str,
         required=True,
     )
-    def delete_stack_component_flavor_command(name: str) -> None:
+    def delete_stack_component_flavor_command(name_or_id: str) -> None:
         """Deletes a flavor.
 
         Args:
-            name: The name of the flavor.
+            name_or_id: The name of the flavor.
         """
-        with console.status(f"Deleting a {display_name} flavor: {name}`...\n"):
-            cli_utils.print_active_config()
-            cli_utils.print_active_stack()
+        client = Client()
 
-            # Fetch the flavor
-            client = Client()
-            existing_flavor = client.get_flavor_by_name_and_type(
-                name=name, component_type=component_type
-            )
+        with console.status(
+            f"Deleting a {display_name} flavor: {name_or_id}`...\n"
+        ):
+            client.delete_flavor(name_or_id)
 
-            # Delete the flavor
-            client.delete_flavor(existing_flavor)
-
-            cli_utils.declare(
-                f"Successfully deleted flavor '{existing_flavor.name}' "
-                f"for stack component '{existing_flavor.type}'."
-            )
+            cli_utils.declare(f"Successfully deleted flavor '{name_or_id}'.")
 
     return delete_stack_component_flavor_command
 
@@ -1075,6 +966,8 @@ def register_single_stack_component_cli_commands(
     )
     def command_group() -> None:
         """Group commands for a single stack component type."""
+        cli_utils.print_active_config()
+        cli_utils.print_active_stack()
 
     # zenml stack-component get
     get_command = generate_stack_component_get_command(component_type)
@@ -1083,7 +976,9 @@ def register_single_stack_component_cli_commands(
     )(get_command)
 
     # zenml stack-component describe
-    describe_command = generate_stack_component_describe_command(component_type)
+    describe_command = generate_stack_component_describe_command(
+        component_type
+    )
     command_group.command(
         "describe",
         help=f"Show details about the (active) {singular_display_name}.",
@@ -1096,7 +991,9 @@ def register_single_stack_component_cli_commands(
     )(list_command)
 
     # zenml stack-component register
-    register_command = generate_stack_component_register_command(component_type)
+    register_command = generate_stack_component_register_command(
+        component_type
+    )
     context_settings = {"ignore_unknown_options": True}
     command_group.command(
         "register",

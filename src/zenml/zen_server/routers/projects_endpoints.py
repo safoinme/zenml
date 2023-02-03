@@ -12,79 +12,104 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Endpoint definitions for projects."""
-from typing import Dict, List, Optional, Union
+from typing import Dict, Optional, Union
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Security
 
 from zenml.constants import (
     API,
     FLAVORS,
     PIPELINES,
     PROJECTS,
-    ROLES,
     RUNS,
+    SCHEDULES,
     STACK_COMPONENTS,
     STACKS,
     STATISTICS,
+    TEAM_ROLE_ASSIGNMENTS,
+    USER_ROLE_ASSIGNMENTS,
     VERSION_1,
 )
-from zenml.enums import StackComponentType
+from zenml.enums import PermissionType
+from zenml.exceptions import IllegalOperationError
 from zenml.models import (
-    ComponentModel,
-    FlavorModel,
-    PipelineModel,
-    ProjectModel,
-    StackModel,
+    ComponentFilterModel,
+    ComponentRequestModel,
+    ComponentResponseModel,
+    FlavorFilterModel,
+    FlavorRequestModel,
+    FlavorResponseModel,
+    PipelineFilterModel,
+    PipelineRequestModel,
+    PipelineResponseModel,
+    PipelineRunFilterModel,
+    PipelineRunRequestModel,
+    PipelineRunResponseModel,
+    ProjectFilterModel,
+    ProjectRequestModel,
+    ProjectResponseModel,
+    ProjectUpdateModel,
+    ScheduleRequestModel,
+    ScheduleResponseModel,
+    StackFilterModel,
+    StackRequestModel,
+    StackResponseModel,
+    TeamRoleAssignmentFilterModel,
+    TeamRoleAssignmentResponseModel,
+    UserRoleAssignmentFilterModel,
+    UserRoleAssignmentResponseModel,
 )
-from zenml.models.component_model import HydratedComponentModel
-from zenml.models.pipeline_models import PipelineRunModel
-from zenml.models.stack_models import HydratedStackModel
-from zenml.models.user_management_models import RoleAssignmentModel
+from zenml.models.page_model import Page
 from zenml.zen_server.auth import AuthContext, authorize
-from zenml.zen_server.models import CreatePipelineRequest
-from zenml.zen_server.models.component_models import CreateComponentModel
-from zenml.zen_server.models.pipeline_models import (
-    CreatePipelineRunRequest,
-    HydratedPipelineModel,
+from zenml.zen_server.utils import (
+    error_response,
+    handle_exceptions,
+    make_dependable,
+    zen_store,
 )
-from zenml.zen_server.models.projects_models import (
-    CreateProjectRequest,
-    UpdateProjectRequest,
-)
-from zenml.zen_server.models.stack_models import CreateStackRequest
-from zenml.zen_server.utils import error_response, handle_exceptions, zen_store
 
 router = APIRouter(
     prefix=API + VERSION_1 + PROJECTS,
     tags=["projects"],
-    dependencies=[Depends(authorize)],
     responses={401: error_response},
 )
 
 
 @router.get(
     "",
-    response_model=List[ProjectModel],
+    response_model=Page[ProjectResponseModel],
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
-def list_projects() -> List[ProjectModel]:
+def list_projects(
+    project_filter_model: ProjectFilterModel = Depends(
+        make_dependable(ProjectFilterModel)
+    ),
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
+) -> Page[ProjectResponseModel]:
     """Lists all projects in the organization.
+
+    Args:
+        project_filter_model: Filter model used for pagination, sorting,
+                              filtering
 
     Returns:
         A list of projects.
     """
-    return zen_store().list_projects()
+    return zen_store().list_projects(project_filter_model=project_filter_model)
 
 
 @router.post(
     "",
-    response_model=ProjectModel,
+    response_model=ProjectResponseModel,
     responses={401: error_response, 409: error_response, 422: error_response},
 )
 @handle_exceptions
-def create_project(project: CreateProjectRequest) -> ProjectModel:
+def create_project(
+    project: ProjectRequestModel,
+    _: AuthContext = Security(authorize, scopes=[PermissionType.WRITE]),
+) -> ProjectResponseModel:
     """Creates a project based on the requestBody.
 
     # noqa: DAR401
@@ -95,16 +120,19 @@ def create_project(project: CreateProjectRequest) -> ProjectModel:
     Returns:
         The created project.
     """
-    return zen_store().create_project(project=project.to_model())
+    return zen_store().create_project(project=project)
 
 
 @router.get(
     "/{project_name_or_id}",
-    response_model=ProjectModel,
+    response_model=ProjectResponseModel,
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
-def get_project(project_name_or_id: Union[str, UUID]) -> ProjectModel:
+def get_project(
+    project_name_or_id: Union[str, UUID],
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
+) -> ProjectResponseModel:
     """Get a project for given name.
 
     # noqa: DAR401
@@ -120,13 +148,15 @@ def get_project(project_name_or_id: Union[str, UUID]) -> ProjectModel:
 
 @router.put(
     "/{project_name_or_id}",
-    response_model=ProjectModel,
+    response_model=ProjectResponseModel,
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
 def update_project(
-    project_name_or_id: Union[str, UUID], project_update: UpdateProjectRequest
-) -> ProjectModel:
+    project_name_or_id: UUID,
+    project_update: ProjectUpdateModel,
+    _: AuthContext = Security(authorize, scopes=[PermissionType.WRITE]),
+) -> ProjectResponseModel:
     """Get a project for given name.
 
     # noqa: DAR401
@@ -138,10 +168,9 @@ def update_project(
     Returns:
         The updated project.
     """
-    project_in_db = zen_store().get_project(project_name_or_id)
-
     return zen_store().update_project(
-        project=project_update.apply_to_model(project_in_db),
+        project_id=project_name_or_id,
+        project_update=project_update,
     )
 
 
@@ -150,7 +179,10 @@ def update_project(
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
-def delete_project(project_name_or_id: Union[str, UUID]) -> None:
+def delete_project(
+    project_name_or_id: Union[str, UUID],
+    _: AuthContext = Security(authorize, scopes=[PermissionType.WRITE]),
+) -> None:
     """Deletes a project.
 
     Args:
@@ -160,387 +192,500 @@ def delete_project(project_name_or_id: Union[str, UUID]) -> None:
 
 
 @router.get(
-    "/{project_name_or_id}" + ROLES,
-    response_model=List[RoleAssignmentModel],
+    "/{project_name_or_id}" + USER_ROLE_ASSIGNMENTS,
+    response_model=Page[UserRoleAssignmentResponseModel],
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
-def get_role_assignments_for_project(
+def list_user_role_assignments_for_project(
     project_name_or_id: Union[str, UUID],
-    user_name_or_id: Optional[Union[str, UUID]] = None,
-    team_name_or_id: Optional[Union[str, UUID]] = None,
-) -> List[RoleAssignmentModel]:
+    user_role_assignment_filter_model: UserRoleAssignmentFilterModel = Depends(
+        make_dependable(UserRoleAssignmentFilterModel)
+    ),
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
+) -> Page[UserRoleAssignmentResponseModel]:
     """Returns a list of all roles that are assigned to a team.
 
     Args:
         project_name_or_id: Name or ID of the project.
-        user_name_or_id: If provided, only list roles that are assigned to the
-            given user.
-        team_name_or_id: If provided, only list roles that are assigned to the
-            given team.
+        user_role_assignment_filter_model: Filter model used for pagination, sorting,
+                                    filtering
 
     Returns:
         A list of all roles that are assigned to a team.
     """
-    return zen_store().list_role_assignments(
-        project_name_or_id=project_name_or_id,
-        user_name_or_id=user_name_or_id,
-        team_name_or_id=team_name_or_id,
+    project = zen_store().get_project(project_name_or_id)
+    user_role_assignment_filter_model.project_id = project.id
+    return zen_store().list_user_role_assignments(
+        user_role_assignment_filter_model=user_role_assignment_filter_model
+    )
+
+
+@router.get(
+    "/{project_name_or_id}" + TEAM_ROLE_ASSIGNMENTS,
+    response_model=Page[TeamRoleAssignmentResponseModel],
+    responses={401: error_response, 404: error_response, 422: error_response},
+)
+@handle_exceptions
+def list_team_role_assignments_for_project(
+    project_name_or_id: Union[str, UUID],
+    team_role_assignment_filter_model: TeamRoleAssignmentFilterModel = Depends(
+        make_dependable(TeamRoleAssignmentFilterModel)
+    ),
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
+) -> Page[TeamRoleAssignmentResponseModel]:
+    """Returns a list of all roles that are assigned to a team.
+
+    Args:
+        project_name_or_id: Name or ID of the project.
+        team_role_assignment_filter_model: Filter model used for pagination, sorting,
+                                    filtering
+
+    Returns:
+        A list of all roles that are assigned to a team.
+    """
+    project = zen_store().get_project(project_name_or_id)
+    team_role_assignment_filter_model.project_id = project.id
+    return zen_store().list_team_role_assignments(
+        team_role_assignment_filter_model=team_role_assignment_filter_model
     )
 
 
 @router.get(
     "/{project_name_or_id}" + STACKS,
-    response_model=Union[List[HydratedStackModel], List[StackModel]],  # type: ignore[arg-type]
+    response_model=Page[StackResponseModel],
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
 def list_project_stacks(
     project_name_or_id: Union[str, UUID],
-    user_name_or_id: Optional[Union[str, UUID]] = None,
-    component_id: Optional[UUID] = None,
-    stack_name: Optional[str] = None,
-    is_shared: Optional[bool] = None,
-    hydrated: bool = False,
-) -> Union[List[HydratedStackModel], List[StackModel]]:
-    """Get stacks that are part of a specific project.
+    stack_filter_model: StackFilterModel = Depends(
+        make_dependable(StackFilterModel)
+    ),
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.READ]
+    ),
+) -> Page[StackResponseModel]:
+    """Get stacks that are part of a specific project for the user.
 
     # noqa: DAR401
 
     Args:
         project_name_or_id: Name or ID of the project.
-        user_name_or_id: Optionally filter by name or ID of the user.
-        component_id: Optionally filter by component that is part of the stack.
-        stack_name: Optionally filter by stack name
-        is_shared: Optionally filter by shared status of the stack
-        hydrated: Defines if stack components, users and projects will be
-                  included by reference (FALSE) or as model (TRUE)
+        stack_filter_model: Filter model used for pagination, sorting, filtering
+        auth_context: Authentication Context
 
     Returns:
         All stacks part of the specified project.
     """
-    stacks_list = zen_store().list_stacks(
-        project_name_or_id=project_name_or_id,
-        user_name_or_id=user_name_or_id,
-        component_id=component_id,
-        is_shared=is_shared,
-        name=stack_name,
-    )
-    if hydrated:
-        return [stack.to_hydrated_model() for stack in stacks_list]
-    else:
-        return stacks_list
+    project = zen_store().get_project(project_name_or_id)
+    stack_filter_model.set_scope_project(project.id)
+    stack_filter_model.set_scope_user(user_id=auth_context.user.id)
+    return zen_store().list_stacks(stack_filter_model=stack_filter_model)
 
 
 @router.post(
     "/{project_name_or_id}" + STACKS,
-    response_model=Union[HydratedStackModel, StackModel],  # type: ignore[arg-type]
+    response_model=StackResponseModel,
     responses={401: error_response, 409: error_response, 422: error_response},
 )
 @handle_exceptions
 def create_stack(
     project_name_or_id: Union[str, UUID],
-    stack: CreateStackRequest,
-    hydrated: bool = False,
-    auth_context: AuthContext = Depends(authorize),
-) -> Union[HydratedStackModel, StackModel]:
+    stack: StackRequestModel,
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.WRITE]
+    ),
+) -> StackResponseModel:
     """Creates a stack for a particular project.
 
     Args:
         project_name_or_id: Name or ID of the project.
         stack: Stack to register.
-        hydrated: Defines if stack components, users and projects will be
-            included by reference (FALSE) or as model (TRUE)
         auth_context: The authentication context.
 
     Returns:
         The created stack.
+
+    Raises:
+        IllegalOperationError: If the project or user specified in the stack
+            does not match the current project or authenticated user.
     """
     project = zen_store().get_project(project_name_or_id)
-    full_stack = stack.to_model(
-        project=project.id,
-        user=auth_context.user.id,
-    )
 
-    created_stack = zen_store().create_stack(stack=full_stack)
-    if hydrated:
-        return created_stack.to_hydrated_model()
-    else:
-        return created_stack
+    if stack.project != project.id:
+        raise IllegalOperationError(
+            "Creating stacks outside of the project scope "
+            f"of this endpoint `{project_name_or_id}` is "
+            f"not supported."
+        )
+    if stack.user != auth_context.user.id:
+        raise IllegalOperationError(
+            "Creating stacks for a user other than yourself "
+            "is not supported."
+        )
+
+    return zen_store().create_stack(stack=stack)
 
 
 @router.get(
     "/{project_name_or_id}" + STACK_COMPONENTS,
-    response_model=Union[List[ComponentModel], List[HydratedComponentModel]],  # type: ignore[arg-type]
+    response_model=Page[ComponentResponseModel],
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
 def list_project_stack_components(
     project_name_or_id: Union[str, UUID],
-    user_name_or_id: Optional[Union[str, UUID]] = None,
-    type: Optional[str] = None,
-    name: Optional[str] = None,
-    flavor_name: Optional[str] = None,
-    is_shared: Optional[bool] = None,
-    hydrated: bool = False,
-) -> Union[List[ComponentModel], List[HydratedComponentModel]]:
+    component_filter_model: ComponentFilterModel = Depends(
+        make_dependable(ComponentFilterModel)
+    ),
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.READ]
+    ),
+) -> Page[ComponentResponseModel]:
     """List stack components that are part of a specific project.
 
     # noqa: DAR401
 
     Args:
         project_name_or_id: Name or ID of the project.
-        user_name_or_id: Optionally filter by name or ID of the user.
-        name: Optionally filter by component name
-        type: Optionally filter by component type
-        flavor_name: Optionally filter by flavor name
-        is_shared: Optionally filter by shared status of the component
-        hydrated: Defines if users and projects will be
-            included by reference (FALSE) or as model (TRUE)
+        component_filter_model: Filter model used for pagination, sorting,
+            filtering
+        auth_context: Authentication Context
 
     Returns:
         All stack components part of the specified project.
     """
-    components_list = zen_store().list_stack_components(
-        project_name_or_id=project_name_or_id,
-        user_name_or_id=user_name_or_id,
-        type=type,
-        is_shared=is_shared,
-        name=name,
-        flavor_name=flavor_name,
+    project = zen_store().get_project(project_name_or_id)
+    component_filter_model.set_scope_project(project.id)
+    component_filter_model.set_scope_user(user_id=auth_context.user.id)
+    return zen_store().list_stack_components(
+        component_filter_model=component_filter_model
     )
-    if hydrated:
-        return [comp.to_hydrated_model() for comp in components_list]
-    else:
-        return components_list
 
 
 @router.post(
     "/{project_name_or_id}" + STACK_COMPONENTS,
-    response_model=Union[ComponentModel, HydratedComponentModel],  # type: ignore[arg-type]
+    response_model=ComponentResponseModel,
     responses={401: error_response, 409: error_response, 422: error_response},
 )
 @handle_exceptions
 def create_stack_component(
     project_name_or_id: Union[str, UUID],
-    component: CreateComponentModel,
-    hydrated: bool = False,
-    auth_context: AuthContext = Depends(authorize),
-) -> Union[ComponentModel, HydratedComponentModel]:
+    component: ComponentRequestModel,
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.WRITE]
+    ),
+) -> ComponentResponseModel:
     """Creates a stack component.
 
     Args:
         project_name_or_id: Name or ID of the project.
         component: Stack component to register.
-        hydrated: Defines if stack components, users and projects will be
-            included by reference (FALSE) or as model (TRUE)
         auth_context: Authentication context.
 
     Returns:
         The created stack component.
+
+    Raises:
+        IllegalOperationError: If the project or user specified in the stack
+            component does not match the current project or authenticated user.
     """
     project = zen_store().get_project(project_name_or_id)
-    full_component = component.to_model(
-        project=project.id,
-        user=auth_context.user.id,
-    )
+
+    if component.project != project.id:
+        raise IllegalOperationError(
+            "Creating components outside of the project scope "
+            f"of this endpoint `{project_name_or_id}` is "
+            f"not supported."
+        )
+    if component.user != auth_context.user.id:
+        raise IllegalOperationError(
+            "Creating components for a user other than yourself "
+            "is not supported."
+        )
 
     # TODO: [server] if possible it should validate here that the configuration
     #  conforms to the flavor
 
-    created_component = zen_store().create_stack_component(
-        component=full_component,
-    )
-    if hydrated:
-        return created_component.to_hydrated_model()
-    else:
-        return created_component
+    return zen_store().create_stack_component(component=component)
 
 
 @router.get(
     "/{project_name_or_id}" + FLAVORS,
-    response_model=List[FlavorModel],
+    response_model=Page[FlavorResponseModel],
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
 def list_project_flavors(
     project_name_or_id: Optional[Union[str, UUID]] = None,
-    component_type: Optional[StackComponentType] = None,
-    user_name_or_id: Optional[Union[str, UUID]] = None,
-    name: Optional[str] = None,
-    is_shared: Optional[bool] = None,
-    hydrated: bool = False,
-) -> List[FlavorModel]:
+    flavor_filter_model: FlavorFilterModel = Depends(
+        make_dependable(FlavorFilterModel)
+    ),
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
+) -> Page[FlavorResponseModel]:
     """List stack components flavors of a certain type that are part of a project.
 
     # noqa: DAR401
 
     Args:
-        component_type: Type of the component.
         project_name_or_id: Name or ID of the project.
-        user_name_or_id: Optionally filter by name or ID of the user.
-        name: Optionally filter by flavor name.
-        is_shared: Optionally filter by shared status of the flavor.
-        hydrated: Defines if users and projects will be
-            included by reference (FALSE) or as model (TRUE)
+        flavor_filter_model: Filter model used for pagination, sorting,
+            filtering
+
 
     Returns:
         All stack components of a certain type that are part of a project.
     """
-    flavors_list = zen_store().list_flavors(
-        project_name_or_id=project_name_or_id,
-        component_type=component_type,
-        user_name_or_id=user_name_or_id,
-        is_shared=is_shared,
-        name=name,
-    )
-    # if hydrated:
-    #     return [flavor.to_hydrated_model() for flavor in flavors_list]
-    # else:
-    #     return flavors_list
-    return flavors_list
+    if project_name_or_id:
+        project = zen_store().get_project(project_name_or_id)
+        flavor_filter_model.set_scope_project(project.id)
+    return zen_store().list_flavors(flavor_filter_model=flavor_filter_model)
 
 
 @router.post(
     "/{project_name_or_id}" + FLAVORS,
-    response_model=FlavorModel,
+    response_model=FlavorResponseModel,
     responses={401: error_response, 409: error_response, 422: error_response},
 )
 @handle_exceptions
 def create_flavor(
     project_name_or_id: Union[str, UUID],
-    flavor: FlavorModel,
-    hydrated: bool = False,
-    auth_context: AuthContext = Depends(authorize),
-) -> FlavorModel:
+    flavor: FlavorRequestModel,
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.WRITE]
+    ),
+) -> FlavorResponseModel:
     """Creates a stack component flavor.
 
     Args:
         project_name_or_id: Name or ID of the project.
         flavor: Stack component flavor to register.
-        hydrated: Defines if users and projects will be
-            included by reference (FALSE) or as model (TRUE)
         auth_context: Authentication context.
 
     Returns:
         The created stack component flavor.
+
+    Raises:
+        IllegalOperationError: If the project or user specified in the stack
+            component flavor does not match the current project or authenticated
+            user.
     """
     project = zen_store().get_project(project_name_or_id)
-    flavor.project = project.id
-    flavor.user = auth_context.user.id
+
+    if flavor.project != project.id:
+        raise IllegalOperationError(
+            "Creating flavors outside of the project scope "
+            f"of this endpoint `{project_name_or_id}` is "
+            f"not supported."
+        )
+    if flavor.user != auth_context.user.id:
+        raise IllegalOperationError(
+            "Creating flavors for a user other than yourself "
+            "is not supported."
+        )
+
     created_flavor = zen_store().create_flavor(
         flavor=flavor,
     )
-    # if hydrated:
-    #     return created_flavor.to_hydrated_model()
-    # else:
-    #     return created_flavor
     return created_flavor
 
 
 @router.get(
     "/{project_name_or_id}" + PIPELINES,
-    response_model=Union[List[HydratedPipelineModel], List[PipelineModel]],  # type: ignore[arg-type]
+    response_model=Page[PipelineResponseModel],
     responses={401: error_response, 404: error_response, 422: error_response},
 )
 @handle_exceptions
 def list_project_pipelines(
     project_name_or_id: Union[str, UUID],
-    user_name_or_id: Optional[Union[str, UUID]] = None,
-    name: Optional[str] = None,
-    hydrated: bool = False,
-) -> Union[List[HydratedPipelineModel], List[PipelineModel]]:
+    pipeline_filter_model: PipelineFilterModel = Depends(
+        make_dependable(PipelineFilterModel)
+    ),
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
+) -> Page[PipelineResponseModel]:
     """Gets pipelines defined for a specific project.
 
     # noqa: DAR401
 
     Args:
-        project_name_or_id: Name or ID of the project to get pipelines for.
-        user_name_or_id: Optionally filter by name or ID of the user.
-        name: Optionally filter by pipeline name
-        hydrated: Defines if stack components, users and projects will be
-                  included by reference (FALSE) or as model (TRUE)
+        project_name_or_id: Name or ID of the project.
+        pipeline_filter_model: Filter model used for pagination, sorting,
+            filtering
 
     Returns:
         All pipelines within the project.
     """
-    pipelines_list = zen_store().list_pipelines(
-        project_name_or_id=project_name_or_id,
-        user_name_or_id=user_name_or_id,
-        name=name,
+    project = zen_store().get_project(project_name_or_id)
+    pipeline_filter_model.set_scope_project(project.id)
+    return zen_store().list_pipelines(
+        pipeline_filter_model=pipeline_filter_model
     )
-    if hydrated:
-        return [
-            HydratedPipelineModel.from_model(pipeline)
-            for pipeline in pipelines_list
-        ]
-    else:
-        return pipelines_list
 
 
 @router.post(
     "/{project_name_or_id}" + PIPELINES,
-    response_model=Union[HydratedPipelineModel, PipelineModel],  # type: ignore[arg-type]
+    response_model=PipelineResponseModel,
     responses={401: error_response, 409: error_response, 422: error_response},
 )
 @handle_exceptions
 def create_pipeline(
     project_name_or_id: Union[str, UUID],
-    pipeline: CreatePipelineRequest,
-    hydrated: bool = False,
-    auth_context: AuthContext = Depends(authorize),
-) -> Union[HydratedPipelineModel, PipelineModel]:
+    pipeline: PipelineRequestModel,
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.WRITE]
+    ),
+) -> PipelineResponseModel:
     """Creates a pipeline.
 
     Args:
         project_name_or_id: Name or ID of the project.
         pipeline: Pipeline to create.
-        hydrated: Defines if stack components, users and projects will be
-            included by reference (FALSE) or as model (TRUE)
         auth_context: Authentication context.
 
     Returns:
         The created pipeline.
+
+    Raises:
+        IllegalOperationError: If the project or user specified in the pipeline
+            does not match the current project or authenticated user.
     """
     project = zen_store().get_project(project_name_or_id)
-    pipeline_model = pipeline.to_model(
-        project=project.id,
-        user=auth_context.user.id,
-    )
-    created_pipeline = zen_store().create_pipeline(pipeline=pipeline_model)
-    if hydrated:
-        return HydratedPipelineModel.from_model(created_pipeline)
-    else:
-        return created_pipeline
+
+    if pipeline.project != project.id:
+        raise IllegalOperationError(
+            "Creating pipelines outside of the project scope "
+            f"of this endpoint `{project_name_or_id}` is "
+            f"not supported."
+        )
+    if pipeline.user != auth_context.user.id:
+        raise IllegalOperationError(
+            "Creating pipelines for a user other than yourself "
+            "is not supported."
+        )
+
+    return zen_store().create_pipeline(pipeline=pipeline)
+
+
+@router.get(
+    "/{project_name_or_id}" + RUNS,
+    response_model=Page[PipelineRunResponseModel],
+    responses={401: error_response, 404: error_response, 422: error_response},
+)
+@handle_exceptions
+def list_runs(
+    project_name_or_id: Union[str, UUID],
+    runs_filter_model: PipelineRunFilterModel = Depends(
+        make_dependable(PipelineRunFilterModel)
+    ),
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
+) -> Page[PipelineRunResponseModel]:
+    """Get pipeline runs according to query filters.
+
+    Args:
+        project_name_or_id: Name or ID of the project.
+        runs_filter_model: Filter model used for pagination, sorting,
+                                   filtering
+
+
+    Returns:
+        The pipeline runs according to query filters.
+    """
+    project = zen_store().get_project(project_name_or_id)
+    runs_filter_model.set_scope_project(project.id)
+    return zen_store().list_runs(runs_filter_model=runs_filter_model)
+
+
+@router.post(
+    "/{project_name_or_id}" + SCHEDULES,
+    response_model=ScheduleResponseModel,
+    responses={401: error_response, 409: error_response, 422: error_response},
+)
+@handle_exceptions
+def create_schedule(
+    project_name_or_id: Union[str, UUID],
+    schedule: ScheduleRequestModel,
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.WRITE]
+    ),
+) -> ScheduleResponseModel:
+    """Creates a schedule.
+
+    Args:
+        project_name_or_id: Name or ID of the project.
+        schedule: Schedule to create.
+        auth_context: Authentication context.
+
+    Returns:
+        The created schedule.
+
+    Raises:
+        IllegalOperationError: If the project or user specified in the schedule
+            does not match the current project or authenticated user.
+    """
+    project = zen_store().get_project(project_name_or_id)
+
+    if schedule.project != project.id:
+        raise IllegalOperationError(
+            "Creating pipeline runs outside of the project scope "
+            f"of this endpoint `{project_name_or_id}` is "
+            f"not supported."
+        )
+    if schedule.user != auth_context.user.id:
+        raise IllegalOperationError(
+            "Creating pipeline runs for a user other than yourself "
+            "is not supported."
+        )
+    return zen_store().create_schedule(schedule=schedule)
 
 
 @router.post(
     "/{project_name_or_id}" + RUNS,
-    response_model=PipelineRunModel,
+    response_model=PipelineRunResponseModel,
     responses={401: error_response, 409: error_response, 422: error_response},
 )
 @handle_exceptions
 def create_pipeline_run(
     project_name_or_id: Union[str, UUID],
-    pipeline_run: CreatePipelineRunRequest,
-    auth_context: AuthContext = Depends(authorize),
-) -> PipelineRunModel:
+    pipeline_run: PipelineRunRequestModel,
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.WRITE]
+    ),
+    get_if_exists: bool = False,
+) -> PipelineRunResponseModel:
     """Creates a pipeline run.
 
     Args:
         project_name_or_id: Name or ID of the project.
         pipeline_run: Pipeline run to create.
         auth_context: Authentication context.
+        get_if_exists: If a similar pipeline run already exists, return it
+            instead of raising an error.
 
     Returns:
         The created pipeline run.
+
+    Raises:
+        IllegalOperationError: If the project or user specified in the pipeline
+            run does not match the current project or authenticated user.
     """
     project = zen_store().get_project(project_name_or_id)
-    pipeline_run_model = pipeline_run.to_model(
-        project=project.id,
-        user=auth_context.user.id,
-    )
-    return zen_store().create_run(pipeline_run=pipeline_run_model)
+
+    if pipeline_run.project != project.id:
+        raise IllegalOperationError(
+            "Creating pipeline runs outside of the project scope "
+            f"of this endpoint `{project_name_or_id}` is "
+            f"not supported."
+        )
+    if pipeline_run.user != auth_context.user.id:
+        raise IllegalOperationError(
+            "Creating pipeline runs for a user other than yourself "
+            "is not supported."
+        )
+
+    if get_if_exists:
+        return zen_store().get_or_create_run(pipeline_run=pipeline_run)
+    return zen_store().create_run(pipeline_run=pipeline_run)
 
 
 @router.get(
@@ -550,7 +695,8 @@ def create_pipeline_run(
 )
 @handle_exceptions
 def get_project_statistics(
-    project_name_or_id: Union[str, UUID]
+    project_name_or_id: Union[str, UUID],
+    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
 ) -> Dict[str, int]:
     """Gets statistics of a project.
 
@@ -562,22 +708,18 @@ def get_project_statistics(
     Returns:
         All pipelines within the project.
     """
-    # TODO: [server] instead of actually querying all the rows, we should
-    #  use zen_store methods that just return counts
-    zen_store().list_runs()
+    project = zen_store().get_project(project_name_or_id)
     return {
-        "stacks": len(
-            zen_store().list_stacks(project_name_or_id=project_name_or_id)
-        ),
-        "components": len(
-            zen_store().list_stack_components(
-                project_name_or_id=project_name_or_id
-            )
-        ),
-        "pipelines": len(
-            zen_store().list_pipelines(project_name_or_id=project_name_or_id)
-        ),
-        "runs": len(
-            zen_store().list_runs(project_name_or_id=project_name_or_id)
-        ),
+        "stacks": zen_store()
+        .list_stacks(StackFilterModel(project_id=project.id))
+        .total,
+        "components": zen_store()
+        .list_stack_components(ComponentFilterModel(project_id=project.id))
+        .total,
+        "pipelines": zen_store()
+        .list_pipelines(PipelineFilterModel(project_id=project.id))
+        .total,
+        "runs": zen_store()
+        .list_runs(PipelineRunFilterModel(project_id=project.id))
+        .total,
     }

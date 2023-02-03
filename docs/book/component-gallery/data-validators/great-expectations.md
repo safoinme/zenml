@@ -179,7 +179,7 @@ this in case you don't already have a local Data Docs site in your existing
 Great Expectations configuration.
 
 For more, up-to-date information on the Great Expectations Data Validator
-configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.data_validators.ge_data_validator.GreatExpectationsDataValidator).
+configuration, you can have a look at [the API docs](https://apidocs.zenml.io/latest/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.data_validators.ge_data_validator.GreatExpectationsDataValidator).
 
 ## How do you use it?
 
@@ -261,14 +261,13 @@ profiling_pipeline(
 ).run()
 ```
 
-As can be seen from the [step definition](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_profiler.GreatExpectationsProfilerStep), the step
+As can be seen from the [step definition](https://apidocs.zenml.io/latest/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_profiler.GreatExpectationsProfilerStep), the step
 takes in a `pandas.DataFrame` dataset, and it returns a Great Expectations
 `ExpectationSuite` object:
 
 ```python
 class GreatExpectationsProfilerStep(BaseStep):
-    """Standard Great Expectations profiling step implementation.
-    """
+    """Standard Great Expectations profiling step implementation."""
 
     def entrypoint(
         self,
@@ -278,7 +277,7 @@ class GreatExpectationsProfilerStep(BaseStep):
         ...
 ```
 
-You can view [the complete list of configuration parameters](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_profiler.GreatExpectationsProfilerConfig) in the API
+You can view [the complete list of configuration parameters](https://apidocs.zenml.io/latest/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_profiler.GreatExpectationsProfilerConfig) in the API
 docs.
 
 ### The Great Expectations data validator step
@@ -339,7 +338,7 @@ validation_pipeline(
 ).run()
 ```
 
-As can be seen from the [step definition](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_validator.GreatExpectationsValidatorStep), the step
+As can be seen from the [step definition](https://apidocs.zenml.io/latest/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_validator.GreatExpectationsValidatorStep), the step
 takes in a `pandas.DataFrame` dataset and a boolean `condition` and it returns a
 Great Expectations `CheckpointResult` object. The boolean `condition` is only
 used as a means of ordering steps in a pipeline (e.g. if you must force it to
@@ -348,8 +347,7 @@ run only after the data profiling step generates an Expectation Suite):
 ```python
 
 class GreatExpectationsValidatorStep(BaseStep):
-    """Standard Great Expectations data validation step implementation.
-    """
+    """Standard Great Expectations data validation step implementation."""
 
     def entrypoint(
         self,
@@ -360,7 +358,7 @@ class GreatExpectationsValidatorStep(BaseStep):
         ...
 ```
 
-You can view [the complete list of configuration parameters](https://apidocs.zenml.io/latest/api_docs/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_validator.GreatExpectationsValidatorConfig) in the API
+You can view [the complete list of configuration parameters](https://apidocs.zenml.io/latest/integration_code_docs/integrations-great_expectations/#zenml.integrations.great_expectations.steps.ge_validator.GreatExpectationsValidatorConfig) in the API
 docs.
 
 ### Call Great Expectations directly
