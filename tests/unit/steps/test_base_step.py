@@ -23,8 +23,7 @@ from zenml.materializers import BuiltInMaterializer
 from zenml.materializers.base_materializer import BaseMaterializer
 from zenml.models.artifact_models import ArtifactResponseModel
 from zenml.pipelines import pipeline
-from zenml.steps import BaseParameters, BaseStep, Output, StepContext, step
-from zenml.utils import source_utils
+from zenml.steps import BaseParameters, Output, StepContext, step
 
 
 def test_step_decorator_creates_class_in_same_module_as_decorated_function():
@@ -120,7 +119,7 @@ def test_enable_caching_for_step_with_context():
 
 def test_define_step_without_input_annotation():
     """Tests that defining a step with a missing input annotation raises a StepInterfaceError."""
-    with pytest.raises(StepInterfaceError):
+    with does_not_raise():
 
         @step
         def some_step(some_argument, some_other_argument: int) -> None:
@@ -128,8 +127,9 @@ def test_define_step_without_input_annotation():
 
 
 def test_define_step_without_return_annotation():
-    """Tests that defining a step with a missing return annotation raises a StepInterfaceError."""
-    with pytest.raises(StepInterfaceError):
+    """Tests that defining a step with a missing return annotation does not
+    raise a StepInterfaceError."""
+    with does_not_raise():
 
         @step
         def some_step(some_argument: int, some_other_argument: int):
@@ -161,7 +161,7 @@ def test_define_step_with_keyword_only_arguments():
     def some_step(some_argument: int, *, keyword_only_argument: int) -> None:
         pass
 
-    assert "keyword_only_argument" in some_step.INPUT_SIGNATURE
+    assert "keyword_only_argument" in some_step().entrypoint_definition.inputs
 
 
 def test_initialize_step_with_unexpected_config():
@@ -236,220 +236,62 @@ def test_enabling_a_custom_step_operator_for_a_step():
     )
 
 
-def test_pipeline_parameter_name_is_empty_when_initializing_a_step():
-    """Tests that the `pipeline_parameter_name` attribute is `None` when a step is initialized."""
-
-    @step
-    def some_step() -> None:
-        pass
-
-    assert some_step().pipeline_parameter_name is None
-
-
-def test_configure_step_with_wrong_materializer_class():
-    """Tests that passing a random class as a materializer raises a StepInterfaceError."""
-
-    @step
-    def some_step() -> Output(some_output=int):
-        pass
-
-    with pytest.raises(StepInterfaceError):
-        some_step().with_return_materializers(str)  # noqa
-
-
-def test_configure_step_with_wrong_materializer_key():
-    """Tests that passing a materializer for a non-existent argument raises a StepInterfaceError."""
-
-    @step
-    def some_step() -> Output(some_output=int):
-        pass
-
-    with pytest.raises(StepInterfaceError):
-        materializers = {"some_nonexistent_output": BaseMaterializer}
-        some_step().with_return_materializers(materializers)
-
-
-def test_configure_step_with_wrong_materializer_class_in_dict():
-    """Tests that passing a wrong class as materializer for a specific output raises a StepInterfaceError."""
-
-    @step
-    def some_step() -> Output(some_output=int):
-        pass
-
-    materializers = {"some_output": "not_a_materializer_class"}
-    with pytest.raises(StepInterfaceError):
-        some_step().with_return_materializers(materializers)  # noqa
-
-
-def test_setting_a_materializer_for_a_step_with_multiple_outputs():
-    """Tests that setting a materializer for a step with multiple outputs sets the materializer for all the outputs."""
-
-    @step
-    def some_step() -> Output(some_output=int, some_other_output=str):
-        pass
-
-    step_instance = some_step().with_return_materializers(BaseMaterializer)
-
-    base_materializer_source = source_utils.resolve_class(BaseMaterializer)
-
-    assert (
-        step_instance.configuration.outputs["some_output"].materializer_source
-        == base_materializer_source
-    )
-    assert (
-        step_instance.configuration.outputs[
-            "some_other_output"
-        ].materializer_source
-        == base_materializer_source
-    )
-
-
-def test_overwriting_step_materializers():
-    """Tests that calling `with_return_materializers` multiple times allows overwriting of the step materializers."""
-    base_materializer_source = source_utils.resolve_class(BaseMaterializer)
-    builtin_materializer_source = source_utils.resolve_class(
-        BuiltInMaterializer
-    )
-
-    @step
-    def some_step() -> Output(some_output=int, some_other_output=str):
-        pass
-
-    step_instance = some_step()
-    assert not step_instance.configuration.outputs
-
-    step_instance = step_instance.with_return_materializers(
-        {"some_output": BaseMaterializer}
-    )
-    assert (
-        step_instance.configuration.outputs["some_output"].materializer_source
-        == base_materializer_source
-    )
-    assert "some_other_output" not in step_instance.configuration.outputs
-
-    step_instance = step_instance.with_return_materializers(
-        {"some_other_output": BuiltInMaterializer}
-    )
-    assert (
-        step_instance.configuration.outputs[
-            "some_other_output"
-        ].materializer_source
-        == builtin_materializer_source
-    )
-    assert (
-        step_instance.configuration.outputs["some_output"].materializer_source
-        == base_materializer_source
-    )
-
-    step_instance = step_instance.with_return_materializers(
-        {"some_output": BuiltInMaterializer}
-    )
-    assert (
-        step_instance.configuration.outputs["some_output"].materializer_source
-        == builtin_materializer_source
-    )
-
-    step_instance.with_return_materializers(BaseMaterializer)
-    assert (
-        step_instance.configuration.outputs["some_output"].materializer_source
-        == base_materializer_source
-    )
-    assert (
-        step_instance.configuration.outputs[
-            "some_other_output"
-        ].materializer_source
-        == base_materializer_source
-    )
-
-
-def test_call_step_with_args(int_step_output, step_with_two_int_inputs):
+def test_call_step_with_args(step_with_two_int_inputs):
     """Test that a step can be called with args."""
     with does_not_raise():
-        step_with_two_int_inputs()(int_step_output, int_step_output)
+        step_with_two_int_inputs()(1, 2)
 
 
-def test_call_step_with_kwargs(int_step_output, step_with_two_int_inputs):
+def test_call_step_with_kwargs(step_with_two_int_inputs):
     """Test that a step can be called with kwargs."""
     with does_not_raise():
-        step_with_two_int_inputs()(
-            input_1=int_step_output, input_2=int_step_output
-        )
+        step_with_two_int_inputs()(input_1=1, input_2=2)
 
 
-def test_call_step_with_args_and_kwargs(
-    int_step_output, step_with_two_int_inputs
-):
+def test_call_step_with_args_and_kwargs(step_with_two_int_inputs):
     """Test that a step can be called with a mix of args and kwargs."""
     with does_not_raise():
-        step_with_two_int_inputs()(int_step_output, input_2=int_step_output)
+        step_with_two_int_inputs()(1, input_2=2)
 
 
-def test_call_step_with_too_many_args(
-    int_step_output, step_with_two_int_inputs
-):
+def test_call_step_with_too_many_args(step_with_two_int_inputs):
     """Test that calling a step fails when too many args are passed."""
     with pytest.raises(StepInterfaceError):
-        step_with_two_int_inputs()(
-            int_step_output, int_step_output, int_step_output
-        )
+        step_with_two_int_inputs()(1, 2, 3)
 
 
-def test_call_step_with_too_many_args_and_kwargs(
-    int_step_output, step_with_two_int_inputs
-):
+def test_call_step_with_too_many_args_and_kwargs(step_with_two_int_inputs):
     """Test that calling a step fails when too many args and kwargs are passed."""
     with pytest.raises(StepInterfaceError):
-        step_with_two_int_inputs()(
-            int_step_output, input_1=int_step_output, input_2=int_step_output
-        )
+        step_with_two_int_inputs()(1, input_1=2, input_2=3)
 
 
-def test_call_step_with_missing_key(int_step_output, step_with_two_int_inputs):
+def test_call_step_with_missing_key(step_with_two_int_inputs):
     """Test that calling a step fails when an argument is missing."""
     with pytest.raises(StepInterfaceError):
-        step_with_two_int_inputs()(input_1=int_step_output)
+        step_with_two_int_inputs()(input_1=1)
 
 
-def test_call_step_with_unexpected_key(
-    int_step_output, step_with_two_int_inputs
-):
+def test_call_step_with_unexpected_key(step_with_two_int_inputs):
     """Test that calling a step fails when an argument has an unexpected key."""
     with pytest.raises(StepInterfaceError):
         step_with_two_int_inputs()(
-            input_1=int_step_output,
-            input_2=int_step_output,
-            input_3=int_step_output,
+            input_1=1,
+            input_2=2,
+            input_3=3,
         )
 
 
-def test_call_step_with_wrong_arg_type(
-    int_step_output, step_with_two_int_inputs
-):
+def test_call_step_with_wrong_arg_type(step_with_two_int_inputs):
     """Test that calling a step fails when an arg has a wrong type."""
     with pytest.raises(StepInterfaceError):
-        step_with_two_int_inputs()(1, int_step_output)
+        step_with_two_int_inputs()(1, "not_an_int")
 
 
-def test_call_step_with_wrong_kwarg_type(
-    int_step_output, step_with_two_int_inputs
-):
+def test_call_step_with_wrong_kwarg_type(step_with_two_int_inputs):
     """Test that calling a step fails when a kwarg has a wrong type."""
     with pytest.raises(StepInterfaceError):
-        step_with_two_int_inputs()(input_1=1, input_2=int_step_output)
-
-
-def test_call_step_with_missing_materializer_for_type():
-    """Tests that calling a step with an output without registered materializer raises a StepInterfaceError."""
-
-    class MyTypeWithoutMaterializer:
-        pass
-
-    @step
-    def some_step() -> MyTypeWithoutMaterializer:
-        return MyTypeWithoutMaterializer()
-
-    with pytest.raises(StepInterfaceError):
-        some_step()()
+        step_with_two_int_inputs()(input_1=1, input_2="not_an_int")
 
 
 class MyType:
@@ -483,9 +325,11 @@ def test_step_uses_config_class_default_values_if_no_config_is_passed():
 
     # don't pass the config when initializing the step
     step_instance = some_step()
-    step_instance._finalize_configuration({})
+    step_instance._finalize_configuration({}, {})
 
-    assert step_instance.configuration.parameters["some_parameter"] == 1
+    assert (
+        step_instance.configuration.parameters["params"]["some_parameter"] == 1
+    )
 
 
 def test_step_fails_if_config_parameter_value_is_missing():
@@ -502,7 +346,7 @@ def test_step_fails_if_config_parameter_value_is_missing():
     step_instance = some_step()
 
     with pytest.raises(MissingStepParameterError):
-        step_instance._finalize_function_parameters()
+        step_instance._finalize_parameters()
 
 
 def test_step_config_allows_none_as_default_value():
@@ -519,11 +363,11 @@ def test_step_config_allows_none_as_default_value():
     step_instance = some_step()
 
     with does_not_raise():
-        step_instance._finalize_function_parameters()
+        step_instance._finalize_parameters()
 
 
-def test_calling_a_step_twice_raises_an_exception():
-    """Tests that calling once step instance twice raises an exception."""
+def test_calling_a_step_works():
+    """Tests that calling once step instance works."""
 
     @step
     def my_step() -> None:
@@ -531,10 +375,8 @@ def test_calling_a_step_twice_raises_an_exception():
 
     step_instance = my_step()
 
-    # calling once works
-    step_instance()
-
-    with pytest.raises(StepInterfaceError):
+    with does_not_raise():
+        step_instance()
         step_instance()
 
 
@@ -687,8 +529,8 @@ def list_of_str_output_step() -> List[str]:
 
 
 @step
-def dict_of_str_output_step() -> Output(
-    str_output=str, dict_output=Dict[str, int]
+def dict_of_str_output_step() -> (
+    Output(str_output=str, dict_output=Dict[str, int])
 ):
     return "", {}
 
@@ -732,8 +574,8 @@ def test_step_can_have_generic_input_types():
 
 
 @step
-def subscripted_generic_output_step() -> Output(
-    dict_output=Dict[str, int], list_output=List[str]
+def subscripted_generic_output_step() -> (
+    Output(dict_output=Dict[str, int], list_output=List[str])
 ):
     return {}, []
 
@@ -778,8 +620,8 @@ def raw_artifact_test_step_3(
 
 @step
 def raw_artifact_test_step_4(dict_: Dict, list_: List) -> None:
-    assert type(dict_) is dict
-    assert type(list_) is list
+    assert isinstance(dict_, dict)
+    assert isinstance(list_, list)
 
 
 def test_step_can_have_raw_artifacts(clean_client):
@@ -828,12 +670,9 @@ def test_upstream_step_computation():
     pipeline_instance = p(s1, s2, s3)
     pipeline_instance.connect(**pipeline_instance.steps)
 
-    assert s1.upstream_steps == {"upstream_test_step_2"}
+    assert s1.upstream_steps == {s2}
     assert not s2.upstream_steps
-    assert s3.upstream_steps == {
-        "upstream_test_step_1",
-        "upstream_test_step_2",
-    }
+    assert not s3.upstream_steps
 
 
 class ParamTestBaseClass(BaseModel):
@@ -887,18 +726,16 @@ def test_step_decorator_configuration_gets_applied_during_initialization(
         "experiment_tracker": "e",
         "step_operator": "s",
         "extra": {"key": "value"},
-        "settings": {"docker": {"target_repository": "custom_repo"}},
-        "output_artifacts": None,
-        "output_materializers": None,
     }
 
     @step(**config)
     def s() -> None:
         pass
 
-    mock_configure = mocker.patch.object(BaseStep, "configure")
-    s()
-    mock_configure.assert_called_with(**config)
+    step_instance = s()
+    assert step_instance.configuration.experiment_tracker == "e"
+    assert step_instance.configuration.step_operator == "s"
+    assert step_instance.configuration.extra == {"key": "value"}
 
 
 def test_step_configuration(empty_step):
@@ -906,14 +743,12 @@ def test_step_configuration(empty_step):
     configurations."""
     step_instance = empty_step()
     step_instance.configure(
-        name="name",
         enable_cache=False,
         experiment_tracker="experiment_tracker",
         step_operator="step_operator",
         extra={"key": "value"},
     )
 
-    assert step_instance.configuration.name == "name"
     assert step_instance.configuration.enable_cache is False
     assert (
         step_instance.configuration.experiment_tracker == "experiment_tracker"
@@ -923,14 +758,12 @@ def test_step_configuration(empty_step):
 
     # No merging
     step_instance.configure(
-        name="name2",
         enable_cache=True,
         experiment_tracker="experiment_tracker2",
         step_operator="step_operator2",
         extra={"key2": "value2"},
         merge=False,
     )
-    assert step_instance.configuration.name == "name2"
     assert step_instance.configuration.enable_cache is True
     assert (
         step_instance.configuration.experiment_tracker == "experiment_tracker2"
@@ -940,14 +773,12 @@ def test_step_configuration(empty_step):
 
     # With merging
     step_instance.configure(
-        name="name3",
         enable_cache=False,
         experiment_tracker="experiment_tracker3",
         step_operator="step_operator3",
         extra={"key3": "value3"},
         merge=True,
     )
-    assert step_instance.configuration.name == "name3"
     assert step_instance.configuration.enable_cache is False
     assert (
         step_instance.configuration.experiment_tracker == "experiment_tracker3"
@@ -982,7 +813,9 @@ def test_configure_step_with_invalid_materializer_key_or_source():
 
     with pytest.raises(StepInterfaceError):
         step_instance.configure(
-            output_materializers={"output": "not_a_materializer_source"}
+            output_materializers={
+                "output": "non_existent_module.materializer_class"
+            }
         )
 
     with does_not_raise():
@@ -1014,13 +847,285 @@ def test_configure_step_with_invalid_parameters():
     def step_with_parameters(params: StepParams) -> None:
         pass
 
-    # Missing key
-    with pytest.raises(StepInterfaceError):
-        step_with_parameters().configure(parameters={"invalid_key": 1})
-
-    # Wrong type
-    with pytest.raises(StepInterfaceError):
-        step_with_parameters().configure(parameters={"key": "not_an_int"})
-
     with does_not_raise():
         step_with_parameters().configure(parameters={"key": 1})
+
+    # Missing key (only fail once step is called)
+    step_instance = step_with_parameters().configure(
+        parameters={"invalid_key": 1}
+    )
+    with pytest.raises(StepInterfaceError):
+        step_instance()
+
+    # Wrong type (only fail once step is called)
+    step_instance = step_with_parameters().configure(
+        parameters={"key": "not_an_int"}
+    )
+    with pytest.raises(StepInterfaceError):
+        step_instance()
+
+
+def on_failure_with_context(context: StepContext):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_failure_with_params(params: BaseParameters):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_failure_with_exception(e: BaseException):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_failure_with_all(
+    context: StepContext, params: BaseParameters, e: BaseException
+):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_failure_with_wrong_params(a: int):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_failure_with_not_annotated_params(a):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_failure_with_multiple_param_annotations(
+    a: BaseParameters, b: BaseParameters
+):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_failure_with_no_params():
+    global is_hook_called
+    is_hook_called = True
+
+
+@step
+def exception_step(params: BaseParameters) -> None:
+    raise BaseException("A cat appeared!")
+
+
+def test_configure_step_with_failure_hook(one_step_pipeline):
+    """Tests that configuring a step with different failure
+    hook configurations"""
+    global is_hook_called
+
+    # Test 1
+    is_hook_called = False
+    with pytest.raises(BaseException):
+        one_step_pipeline(
+            exception_step().configure(on_failure=on_failure_with_context)
+        ).run(unlisted=True)
+    assert is_hook_called
+
+    # Test 2
+    is_hook_called = False
+    with pytest.raises(BaseException):
+        one_step_pipeline(
+            exception_step().configure(on_failure=on_failure_with_params)
+        ).run(unlisted=True)
+    assert is_hook_called
+
+    # Test 3
+    is_hook_called = False
+    with pytest.raises(BaseException):
+        one_step_pipeline(
+            exception_step().configure(on_failure=on_failure_with_exception)
+        ).run(unlisted=True)
+    assert is_hook_called
+
+    # Test 4
+    is_hook_called = False
+    with pytest.raises(BaseException):
+        one_step_pipeline(
+            exception_step().configure(on_failure=on_failure_with_all)
+        ).run(unlisted=True)
+    assert is_hook_called
+
+    # Test 5
+    is_hook_called = False
+    with pytest.raises(ValueError):
+        one_step_pipeline(
+            exception_step().configure(on_failure=on_failure_with_wrong_params)
+        ).run(unlisted=True)
+    assert not is_hook_called
+
+    # Test 6
+    is_hook_called = False
+    with pytest.raises(ValueError):
+        one_step_pipeline(
+            exception_step().configure(
+                on_failure=on_failure_with_not_annotated_params
+            )
+        ).run(unlisted=True)
+    assert not is_hook_called
+
+    # Test 7
+    is_hook_called = False
+    with pytest.raises(ValueError):
+        one_step_pipeline(
+            exception_step().configure(
+                on_failure=on_failure_with_multiple_param_annotations
+            )
+        ).run(unlisted=True)
+    assert not is_hook_called
+
+    # Test 8
+    is_hook_called = False
+    with pytest.raises(BaseException):
+        one_step_pipeline(
+            exception_step().configure(on_failure=on_failure_with_no_params)
+        ).run(unlisted=True)
+    assert is_hook_called
+
+
+def on_success_with_context(context: StepContext):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_success_with_params(params: BaseParameters):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_success_with_exception(e: BaseException):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_success_with_all(context: StepContext, params: BaseParameters):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_success_with_wrong_params(a: int):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_success_with_not_annotated_params(a):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_success_with_multiple_param_annotations(
+    a: BaseParameters, b: BaseParameters
+):
+    global is_hook_called
+    is_hook_called = True
+
+
+def on_success_with_no_params():
+    global is_hook_called
+    is_hook_called = True
+
+
+@step(enable_cache=False)
+def passing_step(params: BaseParameters) -> None:
+    pass
+
+
+def test_configure_step_with_success_hook(one_step_pipeline):
+    """Tests that configuring a step with different success
+    hook configurations"""
+    global is_hook_called
+
+    # Test 1
+    is_hook_called = False
+    one_step_pipeline(
+        passing_step().configure(on_success=on_success_with_context)
+    ).run(unlisted=True)
+    assert is_hook_called
+
+    # Test 2
+    is_hook_called = False
+    one_step_pipeline(
+        passing_step().configure(on_success=on_success_with_params)
+    ).run(unlisted=True)
+    assert is_hook_called
+
+    # Test 3
+    is_hook_called = False
+    one_step_pipeline(
+        passing_step().configure(on_success=on_success_with_all)
+    ).run(unlisted=True)
+    assert is_hook_called
+
+    # Test 4
+    is_hook_called = False
+    with pytest.raises(ValueError):
+        one_step_pipeline(
+            passing_step().configure(on_success=on_success_with_wrong_params)
+        ).run(unlisted=True)
+    assert not is_hook_called
+
+    # Test 5
+    is_hook_called = False
+    with pytest.raises(ValueError):
+        one_step_pipeline(
+            passing_step().configure(
+                on_success=on_success_with_not_annotated_params
+            )
+        ).run(unlisted=True)
+    assert not is_hook_called
+
+    # Test 6
+    is_hook_called = False
+    with pytest.raises(ValueError):
+        one_step_pipeline(
+            passing_step().configure(
+                on_success=on_success_with_multiple_param_annotations
+            )
+        ).run(unlisted=True)
+    assert not is_hook_called
+
+    # Test 7
+    is_hook_called = False
+    one_step_pipeline(
+        passing_step().configure(on_success=on_success_with_no_params)
+    ).run(unlisted=True)
+    assert is_hook_called
+
+
+def on_success():
+    global is_success_hook_called
+    is_success_hook_called = True
+
+
+def on_failure():
+    global is_failure_hook_called
+    is_failure_hook_called = True
+
+
+def test_configure_pipeline_with_hooks(one_step_pipeline):
+    """Tests that configuring a pipeline with hooks"""
+    global is_success_hook_called
+    global is_failure_hook_called
+
+    # Test 1
+    is_success_hook_called = False
+    p = one_step_pipeline(
+        passing_step(),
+    )
+    p.configure(on_success=on_success).run(unlisted=True)
+
+    assert is_success_hook_called
+
+    # Test 2
+    is_failure_hook_called = False
+    p = one_step_pipeline(
+        exception_step(),
+    )
+    with pytest.raises(BaseException):
+        p.configure(on_failure=on_failure).run(unlisted=True)
+    assert is_failure_hook_called

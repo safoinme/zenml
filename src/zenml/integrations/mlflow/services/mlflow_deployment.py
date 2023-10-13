@@ -1,4 +1,4 @@
-#  Copyright (c) ZenML GmbH 2022. All Rights Reserved.
+#  Copyright (c) ZenML GmbH 2022-2023. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -17,10 +17,16 @@ import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import numpy as np
+import pandas as pd
 import requests
 from mlflow.pyfunc.backend import PyFuncBackend
 from mlflow.version import VERSION as MLFLOW_VERSION
 
+from zenml.client import Client
+from zenml.constants import DEFAULT_SERVICE_START_STOP_TIMEOUT
+from zenml.integrations.mlflow.experiment_trackers.mlflow_experiment_tracker import (
+    MLFlowExperimentTracker,
+)
 from zenml.logger import get_logger
 from zenml.services import (
     HTTPEndpointHealthMonitor,
@@ -32,6 +38,7 @@ from zenml.services import (
     ServiceEndpointProtocol,
     ServiceType,
 )
+from zenml.services.service import BaseDeploymentService
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -86,18 +93,27 @@ class MLFlowDeploymentConfig(LocalDaemonServiceConfig):
         model_uri: URI of the MLflow model to serve
         model_name: the name of the model
         workers: number of workers to use for the prediction service
+        registry_model_name: the name of the model in the registry
+        registry_model_version: the version of the model in the registry
         mlserver: set to True to use the MLflow MLServer backend (see
             https://github.com/SeldonIO/MLServer). If False, the
             MLflow built-in scoring server will be used.
+        timeout: timeout in seconds for starting and stopping the service
     """
 
+    # TODO: ServiceConfig should have additional fields such as "pipeline_run_uuid"
+    #  and "pipeline_uuid" to allow for better tracking of the service.
     model_uri: str
     model_name: str
+    registry_model_name: Optional[str] = None
+    registry_model_version: Optional[str] = None
+    registry_model_stage: Optional[str] = None
     workers: int = 1
     mlserver: bool = False
+    timeout: int = DEFAULT_SERVICE_START_STOP_TIMEOUT
 
 
-class MLFlowDeploymentService(LocalDaemonService):
+class MLFlowDeploymentService(LocalDaemonService, BaseDeploymentService):
     """MLflow deployment service used to start a local prediction server for MLflow models.
 
     Attributes:
@@ -160,27 +176,45 @@ class MLFlowDeploymentService(LocalDaemonService):
         super().__init__(config=config, **attrs)
 
     def run(self) -> None:
-        """Start the service."""
+        """Start the service.
+
+        Raises:
+            ValueError: if the active stack doesn't have an MLflow experiment
+                tracker
+        """
         logger.info(
             "Starting MLflow prediction service as blocking "
             "process... press CTRL+C once to stop it."
         )
 
         self.endpoint.prepare_for_start()
-
         try:
+            backend_kwargs: Dict[str, Any] = {}
             serve_kwargs: Dict[str, Any] = {}
+            mlflow_version = MLFLOW_VERSION.split(".")
             # MLflow version 1.26 introduces an additional mandatory
             # `timeout` argument to the `PyFuncBackend.serve` function
-            if int(MLFLOW_VERSION.split(".")[1]) >= 26:
+            if int(mlflow_version[1]) >= 26 or int(mlflow_version[0]) >= 2:
                 serve_kwargs["timeout"] = None
-
+            # Mlflow 2.0+ requires the env_manager to be set to "local"
+            # to run the deploy the model on the local running environment
+            if int(mlflow_version[0]) >= 2:
+                backend_kwargs["env_manager"] = "local"
             backend = PyFuncBackend(
                 config={},
                 no_conda=True,
                 workers=self.config.workers,
                 install_mlflow=False,
+                **backend_kwargs,
             )
+            experiment_tracker = Client().active_stack.experiment_tracker
+            if not isinstance(experiment_tracker, MLFlowExperimentTracker):
+                raise ValueError(
+                    "MLflow model deployer step requires an MLflow experiment "
+                    "tracker. Please add an MLflow experiment tracker to your "
+                    "stack."
+                )
+            experiment_tracker.configure_mlflow()
             backend.serve(
                 model_uri=self.config.model_uri,
                 port=self.endpoint.status.port,
@@ -205,11 +239,13 @@ class MLFlowDeploymentService(LocalDaemonService):
             return None
         return self.endpoint.prediction_url
 
-    def predict(self, request: "NDArray[Any]") -> "NDArray[Any]":
+    def predict(
+        self, request: Union["NDArray[Any]", pd.DataFrame]
+    ) -> "NDArray[Any]":
         """Make a prediction using the service.
 
         Args:
-            request: a numpy array representing the request
+            request: a Numpy Array or Pandas DataFrame representing the request
 
         Returns:
             A numpy array representing the prediction returned by the service.
@@ -225,11 +261,22 @@ class MLFlowDeploymentService(LocalDaemonService):
             )
 
         if self.endpoint.prediction_url is not None:
-            response = requests.post(
-                self.endpoint.prediction_url,
-                json={"instances": request.tolist()},
-            )
+            if type(request) == pd.DataFrame:
+                response = requests.post(  # nosec
+                    self.endpoint.prediction_url,
+                    json={"instances": request.to_dict("records")},
+                )
+            else:
+                response = requests.post(  # nosec
+                    self.endpoint.prediction_url,
+                    json={"instances": request.tolist()},
+                )
         else:
             raise ValueError("No endpoint known for prediction.")
         response.raise_for_status()
-        return np.array(response.json())
+        if int(MLFLOW_VERSION.split(".")[0]) <= 1:
+            return np.array(response.json())
+        else:
+            # Mlflow 2.0+ returns a dictionary with the predictions
+            # under the "predictions" key
+            return np.array(response.json()["predictions"])

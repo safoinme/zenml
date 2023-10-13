@@ -1,4 +1,4 @@
-#  Copyright (c) ZenML GmbH 2022. All Rights Reserved.
+#  Copyright (c) ZenML GmbH 2023. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -13,99 +13,32 @@
 #  permissions and limitations under the License.
 """Implementation of the Evidently data validator."""
 
-from typing import Any, ClassVar, Dict, List, Optional, Sequence, Tuple, Type
+import os
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Optional,
+    Sequence,
+    Tuple,
+    Type,
+)
 
 import pandas as pd
-from evidently.dashboard import Dashboard  # type: ignore
-from evidently.dashboard.tabs import (  # type: ignore
-    CatTargetDriftTab,
-    ClassificationPerformanceTab,
-    DataDriftTab,
-    DataQualityTab,
-    NumTargetDriftTab,
-    ProbClassificationPerformanceTab,
-    RegressionPerformanceTab,
-)
-from evidently.dashboard.tabs.base_tab import Tab  # type: ignore
-from evidently.model_profile import Profile  # type: ignore
-from evidently.model_profile.sections import (  # type: ignore
-    CatTargetDriftProfileSection,
-    ClassificationPerformanceProfileSection,
-    DataDriftProfileSection,
-    DataQualityProfileSection,
-    NumTargetDriftProfileSection,
-    ProbClassificationPerformanceProfileSection,
-    RegressionPerformanceProfileSection,
-)
-from evidently.model_profile.sections.base_profile_section import (  # type: ignore
-    ProfileSection,
-)
 from evidently.pipeline.column_mapping import ColumnMapping  # type: ignore
+from evidently.report import Report  # type: ignore
+from evidently.test_suite import TestSuite  # type: ignore
 
 from zenml.data_validators import BaseDataValidator, BaseDataValidatorFlavor
 from zenml.integrations.evidently.flavors.evidently_data_validator_flavor import (
     EvidentlyDataValidatorFlavor,
 )
+from zenml.integrations.evidently.metrics import EvidentlyMetricConfig
+from zenml.integrations.evidently.tests import EvidentlyTestConfig
 from zenml.logger import get_logger
-from zenml.utils.source_utils import load_source_path_class
+from zenml.utils import source_utils
 
 logger = get_logger(__name__)
-
-
-profile_mapper = {
-    "datadrift": DataDriftProfileSection,
-    "categoricaltargetdrift": CatTargetDriftProfileSection,
-    "numericaltargetdrift": NumTargetDriftProfileSection,
-    "dataquality": DataQualityProfileSection,
-    "classificationmodelperformance": ClassificationPerformanceProfileSection,
-    "regressionmodelperformance": RegressionPerformanceProfileSection,
-    "probabilisticmodelperformance": ProbClassificationPerformanceProfileSection,
-}
-
-dashboard_mapper = {
-    "dataquality": DataQualityTab,
-    "datadrift": DataDriftTab,
-    "categoricaltargetdrift": CatTargetDriftTab,
-    "numericaltargetdrift": NumTargetDriftTab,
-    "classificationmodelperformance": ClassificationPerformanceTab,
-    "regressionmodelperformance": RegressionPerformanceTab,
-    "probabilisticmodelperformance": ProbClassificationPerformanceTab,
-}
-
-
-def get_profile_sections_and_tabs(
-    profile_list: Optional[Sequence[str]],
-    verbose_level: int = 1,
-) -> Tuple[List[ProfileSection], List[Tab]]:
-    """Get the profile sections and dashboard tabs for a profile list.
-
-    Args:
-        profile_list: List of identifiers for Evidently profiles.
-        verbose_level: Verbosity level for the rendered dashboard. Use
-            0 for a brief dashboard, 1 for a detailed dashboard.
-
-    Returns:
-        A tuple of two lists of profile sections and tabs.
-
-    Raises:
-        ValueError: if the profile_section is not supported.
-    """
-    profile_list = profile_list or list(profile_mapper.keys())
-    try:
-        return (
-            [profile_mapper[profile]() for profile in profile_list],
-            [
-                dashboard_mapper[profile](verbose_level=verbose_level)
-                for profile in profile_list
-            ],
-        )
-    except KeyError as e:
-        nl = "\n"
-        raise ValueError(
-            f"Invalid profile sections: {profile_list} \n\n"
-            f"Valid and supported options are: {nl}- "
-            f'{f"{nl}- ".join(list(profile_mapper.keys()))}'
-        ) from e
 
 
 class EvidentlyDataValidator(BaseDataValidator):
@@ -173,7 +106,7 @@ class EvidentlyDataValidator(BaseDataValidator):
         options = []
         for option_clspath, option_args in option_list:
             try:
-                option_cls = load_source_path_class(option_clspath)
+                option_cls = source_utils.load(option_clspath)
             except AttributeError:
                 raise ValueError(
                     f"Could not map the `{option_clspath}` Evidently option "
@@ -184,22 +117,46 @@ class EvidentlyDataValidator(BaseDataValidator):
 
         return options
 
+    @staticmethod
+    def _download_nltk_data() -> None:
+        """Download NLTK data for text metrics and tests.
+
+        Raises:
+            ImportError: if NLTK is not installed.
+        """
+        try:
+            import nltk  # type: ignore[import]
+            from nltk.data import path as nltk_path  # type: ignore[import]
+        except ImportError:
+            raise ImportError(
+                "NLTK is not installed. Please install NLTK to use "
+                "Evidently text metrics and tests."
+            )
+
+        # Configure NLTK to use the current working directory to download and
+        # lookup data. This is necessary because the default download directory
+        # is not writable in some Docker containers.
+        nltk_path.append(os.getcwd())
+
+        # Download NLTK data. We need this later on for the Evidently text report.
+        nltk.download("words", download_dir=os.getcwd())
+        nltk.download("wordnet", download_dir=os.getcwd())
+        nltk.download("omw-1.4", download_dir=os.getcwd())
+
     def data_profiling(
         self,
         dataset: pd.DataFrame,
         comparison_dataset: Optional[pd.DataFrame] = None,
-        profile_list: Optional[Sequence[str]] = None,
+        profile_list: Optional[Sequence[EvidentlyMetricConfig]] = None,
         column_mapping: Optional[ColumnMapping] = None,
-        verbose_level: int = 1,
-        profile_options: Sequence[Tuple[str, Dict[str, Any]]] = [],
-        dashboard_options: Sequence[Tuple[str, Dict[str, Any]]] = [],
+        report_options: Sequence[Tuple[str, Dict[str, Any]]] = [],
+        download_nltk_data: bool = False,
         **kwargs: Any,
-    ) -> Tuple[Profile, Dashboard]:
-        """Analyze a dataset and generate a data profile with Evidently.
+    ) -> Report:
+        """Analyze a dataset and generate a data report with Evidently.
 
         The method takes in an optional list of Evidently options to be passed
-        to the profile constructor (`profile_options`) and the dashboard
-        constructor (`dashboard_options`). Each element in the list must be
+        to the report constructor (`report_options`). Each element in the list must be
         composed of two items: the first is a full class path of an Evidently
         option `dataclass`, the second is a dictionary of kwargs with the actual
         option parameters, e.g.:
@@ -219,40 +176,85 @@ class EvidentlyDataValidator(BaseDataValidator):
         ```
 
         Args:
-            dataset: Target dataset to be profiled.
+            dataset: Target dataset to be profiled. When a comparison dataset
+                is provided, this dataset is considered the reference dataset.
             comparison_dataset: Optional dataset to be used for data profiles
-                that require a baseline for comparison (e.g data drift profiles).
-            profile_list: Optional list identifying the categories of Evidently
-                data profiles to be generated.
+                that require a current dataset for comparison (e.g data drift
+                profiles).
+            profile_list: List of Evidently metric configurations to
+                be included in the report. If not provided, all available
+                metric presets will be included.
             column_mapping: Properties of the DataFrame columns used
-            verbose_level: Level of verbosity for the Evidently dashboards. Use
-                0 for a brief dashboard, 1 for a detailed dashboard.
-            profile_options: Optional list of options to pass to the
-                profile constructor.
-            dashboard_options: Optional list of options to pass to the
-                dashboard constructor.
+            report_options: List of Evidently options to be passed to the
+                report constructor.
+            download_nltk_data: Whether to download NLTK data for text metrics.
+                Defaults to False.
             **kwargs: Extra keyword arguments (unused).
 
         Returns:
-            The Evidently Profile and Dashboard objects corresponding to the set
-            of generated profiles.
+            The Evidently Report as JSON object and as HTML.
         """
-        sections, tabs = get_profile_sections_and_tabs(
-            profile_list, verbose_level
-        )
-        unpacked_profile_options = self._unpack_options(profile_options)
-        unpacked_dashboard_options = self._unpack_options(dashboard_options)
+        if download_nltk_data:
+            self._download_nltk_data()
 
-        dashboard = Dashboard(tabs=tabs, options=unpacked_dashboard_options)
-        dashboard.calculate(
+        profile_list = profile_list or EvidentlyMetricConfig.default_metrics()
+        metrics = [metric.to_evidently_metric() for metric in profile_list]
+
+        unpacked_report_options = self._unpack_options(report_options)
+
+        report = Report(metrics=metrics, options=unpacked_report_options)
+
+        report.run(
             reference_data=dataset,
             current_data=comparison_dataset,
             column_mapping=column_mapping,
         )
-        profile = Profile(sections=sections, options=unpacked_profile_options)
-        profile.calculate(
+
+        return report
+
+    def data_validation(
+        self,
+        dataset: Any,
+        comparison_dataset: Optional[Any] = None,
+        check_list: Optional[Sequence[EvidentlyTestConfig]] = None,
+        test_options: Sequence[Tuple[str, Dict[str, Any]]] = [],
+        column_mapping: Optional[ColumnMapping] = None,
+        download_nltk_data: bool = False,
+        **kwargs: Any,
+    ) -> TestSuite:
+        """Validate a dataset with Evidently.
+
+        Args:
+            dataset: Target dataset to be validated.
+            comparison_dataset: Optional dataset to be used for data validation
+                that require a baseline for comparison (e.g data drift
+                validation).
+            check_list: List of Evidently test configurations to be
+                included in the test suite. If not provided, all available
+                test presets will be included.
+            test_options: List of Evidently options to be passed to the
+                test suite constructor.
+            column_mapping: Properties of the DataFrame columns used
+            download_nltk_data: Whether to download NLTK data for text tests.
+                Defaults to False.
+            **kwargs: Extra keyword arguments (unused).
+
+        Returns:
+            The Evidently Test Suite as JSON object and as HTML.
+        """
+        if download_nltk_data:
+            self._download_nltk_data()
+
+        check_list = check_list or EvidentlyTestConfig.default_tests()
+        tests = [test.to_evidently_test() for test in check_list]
+
+        unpacked_test_options = self._unpack_options(test_options)
+
+        test_suite = TestSuite(tests=tests, options=unpacked_test_options)
+        test_suite.run(
             reference_data=dataset,
             current_data=comparison_dataset,
             column_mapping=column_mapping,
         )
-        return profile, dashboard
+
+        return test_suite

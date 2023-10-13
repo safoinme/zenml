@@ -72,6 +72,7 @@ class IntegrationRegistry(object):
         """Method to activate the integrations with are registered in the registry."""
         for name, integration in self._integrations.items():
             if integration.check_installation():
+                logger.debug(f"Activating integration `{name}`...")
                 integration.activate()
                 logger.debug(f"Integration `{name}` is activated.")
             else:
@@ -87,12 +88,15 @@ class IntegrationRegistry(object):
         return [name for name in self._integrations]
 
     def select_integration_requirements(
-        self, integration_name: Optional[str] = None
+        self,
+        integration_name: Optional[str] = None,
+        target_os: Optional[str] = None,
     ) -> List[str]:
         """Select the requirements for a given integration or all integrations.
 
         Args:
             integration_name: Name of the integration to check.
+            target_os: Target OS for the requirements.
 
         Returns:
             List of requirements for the integration.
@@ -102,7 +106,9 @@ class IntegrationRegistry(object):
         """
         if integration_name:
             if integration_name in self.list_integration_names:
-                return self._integrations[integration_name].REQUIREMENTS
+                return self._integrations[integration_name].get_requirements(
+                    target_os=target_os
+                )
             else:
                 raise KeyError(
                     f"Version {integration_name} does not exist. "
@@ -113,7 +119,9 @@ class IntegrationRegistry(object):
             return [
                 requirement
                 for name in self.list_integration_names
-                for requirement in self._integrations[name].REQUIREMENTS
+                for requirement in self._integrations[name].get_requirements(
+                    target_os=target_os
+                )
             ]
 
     def is_installed(self, integration_name: Optional[str] = None) -> bool:

@@ -1,4 +1,4 @@
-#  Copyright (c) ZenML GmbH 2022. All Rights Reserved.
+#  Copyright (c) ZenML GmbH 2023. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -17,7 +17,24 @@ from zenml.models.artifact_models import (
     ArtifactFilterModel,
     ArtifactRequestModel,
     ArtifactResponseModel,
-    ArtifactUpdateModel,
+)
+from zenml.models.auth_models import (
+    OAuthDeviceAuthorizationRequest,
+    OAuthDeviceAuthorizationResponse,
+    OAuthDeviceTokenRequest,
+    OAuthDeviceUserAgentHeader,
+    OAuthDeviceVerificationRequest,
+    OAuthRedirectResponse,
+    OAuthTokenResponse,
+)
+from zenml.models.base_models import BaseRequestModel, BaseResponseModel
+from zenml.models.code_repository_models import (
+    CodeReferenceRequestModel,
+    CodeReferenceResponseModel,
+    CodeRepositoryFilterModel,
+    CodeRepositoryRequestModel,
+    CodeRepositoryResponseModel,
+    CodeRepositoryUpdateModel,
 )
 from zenml.models.component_models import (
     ComponentFilterModel,
@@ -25,11 +42,36 @@ from zenml.models.component_models import (
     ComponentResponseModel,
     ComponentUpdateModel,
 )
+from zenml.models.device_models import (
+    OAuthDeviceFilterModel,
+    OAuthDeviceInternalRequestModel,
+    OAuthDeviceInternalResponseModel,
+    OAuthDeviceInternalUpdateModel,
+    OAuthDeviceResponseModel,
+    OAuthDeviceUpdateModel,
+)
 from zenml.models.filter_models import Filter, BaseFilterModel
 from zenml.models.flavor_models import (
     FlavorFilterModel,
     FlavorRequestModel,
     FlavorResponseModel,
+    FlavorUpdateModel,
+)
+from zenml.models.logs_models import (
+    LogsBaseModel,
+    LogsRequestModel,
+    LogsResponseModel,
+)
+from zenml.models.page_model import Page
+from zenml.models.pipeline_build_models import (
+    PipelineBuildFilterModel,
+    PipelineBuildRequestModel,
+    PipelineBuildResponseModel,
+)
+from zenml.models.pipeline_deployment_models import (
+    PipelineDeploymentFilterModel,
+    PipelineDeploymentRequestModel,
+    PipelineDeploymentResponseModel,
 )
 from zenml.models.pipeline_models import (
     PipelineFilterModel,
@@ -43,23 +85,42 @@ from zenml.models.pipeline_run_models import (
     PipelineRunResponseModel,
     PipelineRunUpdateModel,
 )
-from zenml.models.project_models import (
-    ProjectFilterModel,
-    ProjectRequestModel,
-    ProjectResponseModel,
-    ProjectUpdateModel,
-)
 from zenml.models.role_models import (
     RoleFilterModel,
     RoleRequestModel,
     RoleResponseModel,
     RoleUpdateModel,
 )
+from zenml.models.run_metadata_models import (
+    RunMetadataFilterModel,
+    RunMetadataRequestModel,
+    RunMetadataResponseModel,
+)
 from zenml.models.schedule_model import (
+    ScheduleFilterModel,
     ScheduleRequestModel,
     ScheduleResponseModel,
     ScheduleUpdateModel,
-    ScheduleFilterModel,
+)
+from zenml.models.secret_models import (
+    SecretBaseModel,
+    SecretFilterModel,
+    SecretRequestModel,
+    SecretResponseModel,
+    SecretUpdateModel,
+)
+from zenml.models.server_models import ServerDatabaseType, ServerModel
+from zenml.models.service_connector_models import (
+    AuthenticationMethodModel,
+    ResourceTypeModel,
+    ServiceConnectorBaseModel,
+    ServiceConnectorFilterModel,
+    ServiceConnectorRequestModel,
+    ServiceConnectorRequirements,
+    ServiceConnectorResourcesModel,
+    ServiceConnectorResponseModel,
+    ServiceConnectorTypeModel,
+    ServiceConnectorUpdateModel,
 )
 from zenml.models.stack_models import (
     StackFilterModel,
@@ -85,6 +146,7 @@ from zenml.models.team_role_assignment_models import (
     TeamRoleAssignmentResponseModel,
 )
 from zenml.models.user_models import (
+    ExternalUserModel,
     UserAuthModel,
     UserFilterModel,
     UserRequestModel,
@@ -96,20 +158,46 @@ from zenml.models.user_role_assignment_models import (
     UserRoleAssignmentRequestModel,
     UserRoleAssignmentResponseModel,
 )
+from zenml.models.workspace_models import (
+    WorkspaceFilterModel,
+    WorkspaceRequestModel,
+    WorkspaceResponseModel,
+    WorkspaceUpdateModel,
+)
+from zenml.models.model_models import (
+    ModelFilterModel,
+    ModelResponseModel,
+    ModelRequestModel,
+    ModelUpdateModel,
+    ModelVersionBaseModel,
+    ModelVersionResponseModel,
+    ModelVersionRequestModel,
+    ModelVersionArtifactBaseModel,
+    ModelVersionArtifactFilterModel,
+    ModelVersionArtifactRequestModel,
+    ModelVersionArtifactResponseModel,
+    ModelVersionPipelineRunBaseModel,
+    ModelVersionPipelineRunFilterModel,
+    ModelVersionPipelineRunRequestModel,
+    ModelVersionPipelineRunResponseModel,
+    ModelVersionFilterModel,
+    ModelVersionUpdateModel,
+)
+
 
 ComponentResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
 )
 
 StackResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
 )
 
 FlavorResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
 )
 
 UserResponseModel.update_forward_refs(TeamResponseModel=TeamResponseModel)
@@ -120,98 +208,260 @@ UserRoleAssignmentResponseModel.update_forward_refs(
     RoleResponseModel=RoleResponseModel,
     TeamResponseModel=TeamResponseModel,
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
 )
 
 TeamRoleAssignmentResponseModel.update_forward_refs(
     RoleResponseModel=RoleResponseModel,
     TeamResponseModel=TeamResponseModel,
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
 )
 
 PipelineResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
 )
 
+RunMetadataResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
 ScheduleResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
 )
-
-PipelineRunResponseModel.update_forward_refs(
+PipelineBuildResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
     PipelineResponseModel=PipelineResponseModel,
     StackResponseModel=StackResponseModel,
 )
 
+PipelineDeploymentResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+    PipelineResponseModel=PipelineResponseModel,
+    StackResponseModel=StackResponseModel,
+    PipelineBuildResponseModel=PipelineBuildResponseModel,
+    ScheduleResponseModel=ScheduleResponseModel,
+    CodeReferenceResponseModel=CodeReferenceResponseModel,
+)
+
+PipelineDeploymentRequestModel.update_forward_refs(
+    CodeReferenceRequestModel=CodeReferenceRequestModel,
+)
+
+PipelineRunResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+    PipelineResponseModel=PipelineResponseModel,
+    StackResponseModel=StackResponseModel,
+    RunMetadataResponseModel=RunMetadataResponseModel,
+    PipelineBuildResponseModel=PipelineBuildResponseModel,
+    StepRunResponseModel=StepRunResponseModel,
+    ScheduleResponseModel=ScheduleResponseModel,
+    CodeReferenceResponseModel=CodeReferenceResponseModel,
+)
+
 StepRunResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
     ArtifactResponseModel=ArtifactResponseModel,
+    RunMetadataResponseModel=RunMetadataResponseModel,
 )
 
 ArtifactResponseModel.update_forward_refs(
     UserResponseModel=UserResponseModel,
-    ProjectResponseModel=ProjectResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+    RunMetadataResponseModel=RunMetadataResponseModel,
+)
+
+SecretResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+CodeRepositoryResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+ServiceConnectorResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+ServiceConnectorResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+
+ModelRequestModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+
+ModelResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+
+ModelVersionRequestModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+
+ModelVersionResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+
+ModelVersionArtifactRequestModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+ModelVersionArtifactResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+ModelVersionPipelineRunRequestModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+ModelVersionPipelineRunResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+    WorkspaceResponseModel=WorkspaceResponseModel,
+)
+
+OAuthDeviceResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
+)
+OAuthDeviceInternalResponseModel.update_forward_refs(
+    UserResponseModel=UserResponseModel,
 )
 
 __all__ = [
+    "ArtifactFilterModel",
     "ArtifactRequestModel",
     "ArtifactResponseModel",
-    "ArtifactUpdateModel",
-    "ArtifactFilterModel",
+    "AuthenticationMethodModel",
+    "BaseFilterModel",
+    "BaseRequestModel",
+    "BaseResponseModel",
+    "CodeReferenceRequestModel",
+    "CodeReferenceResponseModel",
+    "CodeRepositoryFilterModel",
+    "CodeRepositoryRequestModel",
+    "CodeRepositoryResponseModel",
+    "CodeRepositoryUpdateModel",
+    "ComponentFilterModel",
     "ComponentRequestModel",
     "ComponentResponseModel",
     "ComponentUpdateModel",
-    "ComponentFilterModel",
+    "ExternalUserModel",
+    "Filter",
+    "FlavorFilterModel",
     "FlavorRequestModel",
     "FlavorResponseModel",
-    "FlavorFilterModel",
-    "BaseFilterModel",
+    "FlavorUpdateModel",
+    "LogsBaseModel",
+    "LogsRequestModel",
+    "LogsResponseModel",
+    "ModelFilterModel",
+    "ModelRequestModel",
+    "ModelResponseModel",
+    "ModelUpdateModel",
+    "ModelVersionBaseModel",
+    "ModelVersionFilterModel",
+    "ModelVersionRequestModel",
+    "ModelVersionResponseModel",
+    "ModelVersionUpdateModel",
+    "ModelVersionArtifactBaseModel",
+    "ModelVersionArtifactFilterModel",
+    "ModelVersionArtifactRequestModel",
+    "ModelVersionArtifactResponseModel",
+    "ModelVersionPipelineRunBaseModel",
+    "ModelVersionPipelineRunFilterModel",
+    "ModelVersionPipelineRunRequestModel",
+    "ModelVersionPipelineRunResponseModel",
+    "OAuthDeviceAuthorizationRequest",
+    "OAuthDeviceAuthorizationResponse",
+    "OAuthDeviceFilterModel",
+    "OAuthDeviceInternalRequestModel",
+    "OAuthDeviceInternalResponseModel",
+    "OAuthDeviceInternalUpdateModel",
+    "OAuthDeviceResponseModel",
+    "OAuthDeviceTokenRequest",
+    "OAuthDeviceUpdateModel",
+    "OAuthDeviceUserAgentHeader",
+    "OAuthDeviceVerificationRequest",
+    "OAuthRedirectResponse",
+    "OAuthTokenResponse",
+    "Page",
+    "PipelineBuildFilterModel",
+    "PipelineBuildRequestModel",
+    "PipelineBuildResponseModel",
+    "PipelineDeploymentFilterModel",
+    "PipelineDeploymentRequestModel",
+    "PipelineDeploymentResponseModel",
+    "PipelineFilterModel",
     "PipelineRequestModel",
     "PipelineResponseModel",
-    "PipelineUpdateModel",
-    "PipelineFilterModel",
+    "PipelineRunFilterModel",
     "PipelineRunRequestModel",
     "PipelineRunResponseModel",
     "PipelineRunUpdateModel",
-    "PipelineRunFilterModel",
-    "ProjectRequestModel",
-    "ProjectResponseModel",
-    "ProjectUpdateModel",
-    "ProjectFilterModel",
-    "UserRoleAssignmentRequestModel",
-    "UserRoleAssignmentResponseModel",
-    "UserRoleAssignmentFilterModel",
-    "TeamRoleAssignmentRequestModel",
-    "TeamRoleAssignmentResponseModel",
-    "TeamRoleAssignmentFilterModel",
+    "PipelineUpdateModel",
+    "ResourceTypeModel",
+    "RoleFilterModel",
     "RoleRequestModel",
     "RoleResponseModel",
     "RoleUpdateModel",
-    "RoleFilterModel",
+    "RunMetadataFilterModel",
+    "RunMetadataRequestModel",
+    "RunMetadataResponseModel",
+    "ScheduleFilterModel",
     "ScheduleRequestModel",
     "ScheduleResponseModel",
     "ScheduleUpdateModel",
-    "ScheduleFilterModel",
+    "SecretBaseModel",
+    "SecretFilterModel",
+    "SecretRequestModel",
+    "SecretResponseModel",
+    "SecretUpdateModel",
+    "ServerDatabaseType",
+    "ServerModel",
+    "ServiceConnectorBaseModel",
+    "ServiceConnectorFilterModel",
+    "ServiceConnectorRequirements",
+    "ServiceConnectorRequestModel",
+    "ServiceConnectorResourcesModel",
+    "ServiceConnectorResponseModel",
+    "ServiceConnectorTypeModel",
+    "ServiceConnectorUpdateModel",
+    "StackFilterModel",
     "StackRequestModel",
     "StackResponseModel",
     "StackUpdateModel",
-    "StackFilterModel",
+    "StepRunFilterModel",
     "StepRunRequestModel",
     "StepRunResponseModel",
     "StepRunUpdateModel",
-    "StepRunFilterModel",
+    "TeamFilterModel",
     "TeamRequestModel",
     "TeamResponseModel",
+    "TeamRoleAssignmentFilterModel",
+    "TeamRoleAssignmentRequestModel",
+    "TeamRoleAssignmentResponseModel",
     "TeamUpdateModel",
-    "TeamFilterModel",
+    "UserRoleAssignmentFilterModel",
+    "UserRoleAssignmentRequestModel",
+    "UserRoleAssignmentResponseModel",
+    "UserAuthModel",
+    "UserFilterModel",
     "UserRequestModel",
     "UserResponseModel",
     "UserUpdateModel",
-    "UserFilterModel",
-    "UserAuthModel",
+    "WorkspaceFilterModel",
+    "WorkspaceRequestModel",
+    "WorkspaceResponseModel",
+    "WorkspaceUpdateModel",
 ]

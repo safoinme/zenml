@@ -13,9 +13,9 @@ The documentation source files can be found in this repository at `docs/book`
 
 ## API Docs
 
-The ZenML API docs are generated from our Python docstrings using [mkdocs](https://www.mkdocs.org/). 
-The API docs will be automatically updated each release using a Github workflow and can be found 
-at[https://apidocs.zenml.io](https://apidocs.zenml.io/).
+The ZenML SDK docs are generated from our Python docstrings using [mkdocs](https://www.mkdocs.org/). 
+The SDK docs will be automatically updated each release using a Github workflow and can be found 
+at[https://sdkdocs.zenml.io](https://sdkdocs.zenml.io/).
 
 ### Building the API Docs locally
 
@@ -24,11 +24,11 @@ To build them locally follow these steps:
 * Clone the repository
 * Install ZenML and all dependencies
 ```python
-poetry install
-poetry run zenml integration install -y
-poetry run pip install click~=8.0.3 typing-extensions~=3.10.0.2
+pip install ".[dev,server]"
+zenml integration install -y
+pip install click~=8.0.3 typing-extensions~=3.10.0.2
 ```
-* Run `poetry run bash scripts/serve_api_docs.sh` from the repository root - 
+* Run `bash scripts/serve_api_docs.sh` from the repository root - 
 running it from elsewhere can lead to unexpected errors. This script will compose the docs hierarchy
 and serve it (default location is http://127.0.0.1:8000/).
 * In case port 8000 is taken you can also manually go into the docs folder within your terminal and

@@ -14,7 +14,7 @@
 """SQL Model Implementations for Pipeline Schedules."""
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
 from sqlmodel import Field, Relationship
@@ -27,12 +27,14 @@ from zenml.models.schedule_model import (
 from zenml.zen_stores.schemas.base_schemas import NamedSchema
 from zenml.zen_stores.schemas.component_schemas import StackComponentSchema
 from zenml.zen_stores.schemas.pipeline_schemas import PipelineSchema
-from zenml.zen_stores.schemas.project_schemas import ProjectSchema
 from zenml.zen_stores.schemas.schema_utils import build_foreign_key_field
 from zenml.zen_stores.schemas.user_schemas import UserSchema
+from zenml.zen_stores.schemas.workspace_schemas import WorkspaceSchema
 
 if TYPE_CHECKING:
-    from zenml.zen_stores.schemas.pipeline_run_schemas import PipelineRunSchema
+    from zenml.zen_stores.schemas.pipeline_deployment_schemas import (
+        PipelineDeploymentSchema,
+    )
 
 
 class ScheduleSchema(NamedSchema, table=True):
@@ -40,15 +42,15 @@ class ScheduleSchema(NamedSchema, table=True):
 
     __tablename__ = "schedule"
 
-    project_id: UUID = build_foreign_key_field(
+    workspace_id: UUID = build_foreign_key_field(
         source=__tablename__,
-        target=ProjectSchema.__tablename__,
-        source_column="project_id",
+        target=WorkspaceSchema.__tablename__,
+        source_column="workspace_id",
         target_column="id",
         ondelete="CASCADE",
         nullable=False,
     )
-    project: "ProjectSchema" = Relationship(back_populates="schedules")
+    workspace: "WorkspaceSchema" = Relationship(back_populates="schedules")
 
     user_id: Optional[UUID] = build_foreign_key_field(
         source=__tablename__,
@@ -69,6 +71,9 @@ class ScheduleSchema(NamedSchema, table=True):
         nullable=True,
     )
     pipeline: "PipelineSchema" = Relationship(back_populates="schedules")
+    deployment: Optional["PipelineDeploymentSchema"] = Relationship(
+        back_populates="schedule"
+    )
 
     orchestrator_id: Optional[UUID] = build_foreign_key_field(
         source=__tablename__,
@@ -89,10 +94,6 @@ class ScheduleSchema(NamedSchema, table=True):
     interval_second: Optional[float] = Field(nullable=True)
     catchup: bool
 
-    runs: List["PipelineRunSchema"] = Relationship(
-        back_populates="schedule",
-    )
-
     @classmethod
     def from_create_model(
         cls, model: ScheduleRequestModel
@@ -111,7 +112,7 @@ class ScheduleSchema(NamedSchema, table=True):
             interval_second = None
         return cls(
             name=model.name,
-            project_id=model.project,
+            workspace_id=model.workspace,
             user_id=model.user,
             pipeline_id=model.pipeline_id,
             orchestrator_id=model.orchestrator_id,
@@ -148,7 +149,7 @@ class ScheduleSchema(NamedSchema, table=True):
             self.interval_second = model.interval_second.total_seconds()
         if model.catchup is not None:
             self.catchup = model.catchup
-        self.updated = datetime.now()
+        self.updated = datetime.utcnow()
         return self
 
     def to_model(self) -> ScheduleResponseModel:
@@ -164,7 +165,7 @@ class ScheduleSchema(NamedSchema, table=True):
         return ScheduleResponseModel(
             id=self.id,
             name=self.name,
-            project=self.project.to_model(),
+            workspace=self.workspace.to_model(),
             user=self.user.to_model(),
             pipeline_id=self.pipeline_id,
             orchestrator_id=self.orchestrator_id,

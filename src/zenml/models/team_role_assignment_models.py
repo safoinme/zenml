@@ -22,9 +22,9 @@ from zenml.models import BaseFilterModel
 from zenml.models.base_models import BaseRequestModel, BaseResponseModel
 
 if TYPE_CHECKING:
-    from zenml.models.project_models import ProjectResponseModel
     from zenml.models.role_models import RoleResponseModel
     from zenml.models.team_models import TeamResponseModel
+    from zenml.models.workspace_models import WorkspaceResponseModel
 
 # ---- #
 # BASE #
@@ -45,13 +45,15 @@ class TeamRoleAssignmentResponseModel(
 ):
     """Response model for role assignments with all entities hydrated."""
 
-    project: Optional["ProjectResponseModel"] = Field(
-        title="The project scope of this role assignment.", default=None
+    workspace: Optional["WorkspaceResponseModel"] = Field(
+        title="The workspace scope of this role assignment.", default=None
     )
     team: Optional["TeamResponseModel"] = Field(
         title="The team the role is assigned to.", default=None
     )
-    role: "RoleResponseModel" = Field(title="The assigned role.", default=None)
+    role: Optional["RoleResponseModel"] = Field(
+        title="The assigned role.", default=None
+    )
 
 
 # ------ #
@@ -62,13 +64,13 @@ class TeamRoleAssignmentResponseModel(
 class TeamRoleAssignmentFilterModel(BaseFilterModel):
     """Model to enable advanced filtering of all Role Assignments."""
 
-    project_id: Union[UUID, str] = Field(
-        default=None, description="Project of the RoleAssignment"
+    workspace_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Workspace of the RoleAssignment"
     )
-    team_id: Union[UUID, str] = Field(
+    team_id: Optional[Union[UUID, str]] = Field(
         default=None, description="Team in the RoleAssignment"
     )
-    role_id: Union[UUID, str] = Field(
+    role_id: Optional[Union[UUID, str]] = Field(
         default=None, description="Role in the RoleAssignment"
     )
 
@@ -83,9 +85,11 @@ class TeamRoleAssignmentRequestModel(
 ):
     """Request model for role assignments using UUIDs for all entities."""
 
-    project: Optional[UUID] = Field(
-        None, title="The project that the role is limited to."
+    workspace: Optional[UUID] = Field(
+        default=None, title="The workspace that the role is limited to."
     )
-    team: UUID = Field(None, title="The user that the role is assigned to.")
+    team: UUID = Field(
+        title="The user that the role is assigned to.",
+    )
 
     role: UUID = Field(title="The role.")

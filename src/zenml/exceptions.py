@@ -13,7 +13,7 @@
 #  permissions and limitations under the License.
 """ZenML specific exception definitions."""
 
-from typing import TYPE_CHECKING, List, Optional, Type
+from typing import TYPE_CHECKING, Dict, List, Optional, Type
 
 if TYPE_CHECKING:
     from zenml.steps import BaseParameters
@@ -37,9 +37,8 @@ class ZenMLBaseException(Exception):
             url: URL to point to in exception message. If `None`, then no url
                  is appended.
         """
-        if message:
-            if url:
-                message += f" For more information, visit {url}."
+        if message and url:
+            message += f" For more information, visit {url}."
         super().__init__(message)
 
 
@@ -60,31 +59,6 @@ class DoesNotExistException(ZenMLBaseException):
         Args:
             message: Message with details of exception.
         """
-        super().__init__(message)
-
-
-class AlreadyExistsException(ZenMLBaseException):
-    """Raises exception when the `name` already exists in the system.
-
-    This happens when an action is trying to create a resource with the same
-    name.
-    """
-
-    def __init__(
-        self,
-        message: Optional[str] = None,
-        name: str = "",
-        resource_type: str = "",
-    ):
-        """Initializes the exception.
-
-        Args:
-            message: Message with details of exception.
-            name: Name of the resource that already exists.
-            resource_type: Type of the resource that already exists.
-        """
-        if message is None:
-            message = f"{resource_type} `{name}` already exists!"
         super().__init__(message)
 
 
@@ -144,6 +118,10 @@ class ArtifactInterfaceError(ZenMLBaseException):
 
 class StackComponentInterfaceError(ZenMLBaseException):
     """Raises exception when interacting with the stack components in an unsupported way."""
+
+
+class StackComponentDeploymentError(ZenMLBaseException):
+    """Raises exception when deploying a stack component fails."""
 
 
 class ArtifactStoreInterfaceError(ZenMLBaseException):
@@ -211,10 +189,6 @@ class DuplicateRunNameError(RuntimeError):
         super().__init__(message)
 
 
-class NotAuthorizedError(ZenMLBaseException):
-    """Raised when the user does not have permission to perform an action."""
-
-
 class ValidationError(ZenMLBaseException):
     """Raised when the Model passed to the ZenStore."""
 
@@ -237,6 +211,10 @@ class SecretExistsError(EntityExistsError):
 
 class StackValidationError(ZenMLBaseException):
     """Raised when a stack configuration is not valid."""
+
+
+class StackComponentValidationError(ZenMLBaseException):
+    """Raised when a stack component configuration is not valid."""
 
 
 class ProvisioningError(ZenMLBaseException):
@@ -281,3 +259,47 @@ class ZenKeyError(KeyError):
             the error message
         """
         return self.message
+
+
+class OAuthError(ValueError):
+    """OAuth2 error."""
+
+    def __init__(
+        self,
+        error: str,
+        status_code: int = 400,
+        error_description: Optional[str] = None,
+        error_uri: Optional[str] = None,
+    ) -> None:
+        """Initializes the OAuthError.
+
+        Args:
+            status_code: HTTP status code.
+            error: Error code.
+            error_description: Error description.
+            error_uri: Error URI.
+        """
+        self.status_code = status_code
+        self.error = error
+        self.error_description = error_description
+        self.error_uri = error_uri
+
+    def to_dict(self) -> Dict[str, Optional[str]]:
+        """Returns the OAuthError as a dictionary.
+
+        Returns:
+            The OAuthError as a dictionary.
+        """
+        return {
+            "error": self.error,
+            "error_description": self.error_description,
+            "error_uri": self.error_uri,
+        }
+
+    def __str__(self) -> str:
+        """String function.
+
+        Returns:
+            the error message
+        """
+        return f"{self.error}: {self.error_description or ''}"

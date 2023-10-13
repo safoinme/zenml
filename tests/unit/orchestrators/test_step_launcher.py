@@ -17,51 +17,11 @@ from uuid import uuid4
 
 import pytest
 
-from zenml.config.pipeline_deployment import PipelineDeployment
-from zenml.config.step_configurations import Step
 from zenml.enums import StackComponentType
 from zenml.orchestrators.step_launcher import (
-    _get_step_name_in_pipeline,
     _get_step_operator,
 )
 from zenml.stack import Stack
-
-
-def test_pipeline_step_name_extraction():
-    """Tests that the name of the step inside the pipeline gets extracted
-    correctly."""
-    step_1 = Step.parse_obj(
-        {
-            "spec": {"source": "", "upstream_steps": [], "inputs": {}},
-            "config": {
-                "name": "step_1_name",
-            },
-        }
-    )
-    step_2 = Step.parse_obj(
-        {
-            "spec": {"source": "", "upstream_steps": [], "inputs": {}},
-            "config": {
-                "name": "step_2_name",
-            },
-        }
-    )
-
-    deployment = PipelineDeployment.parse_obj(
-        {
-            "run_name": "run_name",
-            "stack_id": uuid4(),
-            "pipeline": {"name": "pipeline_name"},
-            "steps": {"step_1": step_1, "step_2": step_2},
-        }
-    )
-
-    assert (
-        _get_step_name_in_pipeline(step_1, deployment=deployment) == "step_1"
-    )
-    assert (
-        _get_step_name_in_pipeline(step_2, deployment=deployment) == "step_2"
-    )
 
 
 def test_step_operator_validation(local_stack, sample_step_operator):

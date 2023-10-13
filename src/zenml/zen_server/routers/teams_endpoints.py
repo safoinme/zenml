@@ -29,8 +29,8 @@ from zenml.models import (
 )
 from zenml.models.page_model import Page
 from zenml.zen_server.auth import AuthContext, authorize
+from zenml.zen_server.exceptions import error_response
 from zenml.zen_server.utils import (
-    error_response,
     handle_exceptions,
     make_dependable,
     zen_store,
@@ -130,7 +130,7 @@ def update_team(
         team_update: Team update.
 
     Returns:
-        The created team.
+        The updated team.
     """
     return zen_store().update_team(team_id=team_id, team_update=team_update)
 

@@ -12,14 +12,13 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Endpoint definitions for pipeline runs."""
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Security
 
 from zenml.constants import (
     API,
-    COMPONENT_SIDE_EFFECTS,
     GRAPH,
     PIPELINE_CONFIGURATION,
     RUNS,
@@ -28,6 +27,7 @@ from zenml.constants import (
     VERSION_1,
 )
 from zenml.enums import ExecutionStatus, PermissionType
+from zenml.lineage_graph.lineage_graph import LineageGraph
 from zenml.models import (
     PipelineRunFilterModel,
     PipelineRunResponseModel,
@@ -36,10 +36,9 @@ from zenml.models import (
     StepRunResponseModel,
 )
 from zenml.models.page_model import Page
-from zenml.post_execution.lineage.lineage_graph import LineageGraph
 from zenml.zen_server.auth import AuthContext, authorize
+from zenml.zen_server.exceptions import error_response
 from zenml.zen_server.utils import (
-    error_response,
     handle_exceptions,
     make_dependable,
     zen_store,
@@ -67,8 +66,7 @@ def list_runs(
     """Get pipeline runs according to query filters.
 
     Args:
-        runs_filter_model: Filter model used for pagination, sorting,
-                                   filtering
+        runs_filter_model: Filter model used for pagination, sorting, filtering
 
     Returns:
         The pipeline runs according to query filters.
@@ -155,11 +153,9 @@ def get_run_dag(
     Returns:
         The DAG for a given pipeline run.
     """
-    from zenml.post_execution.pipeline_run import PipelineRunView
-
     run = zen_store().get_run(run_name_or_id=run_id)
     graph = LineageGraph()
-    graph.generate_run_nodes_and_edges(PipelineRunView(run))
+    graph.generate_run_nodes_and_edges(run)
     return graph
 
 
@@ -188,30 +184,6 @@ def get_run_steps(
 
 
 @router.get(
-    "/{run_id}" + COMPONENT_SIDE_EFFECTS,
-    response_model=Dict,
-    responses={401: error_response, 404: error_response, 422: error_response},
-)
-@handle_exceptions
-def get_run_component_side_effects(
-    run_id: UUID,
-    component_id: Optional[UUID] = None,
-    _: AuthContext = Security(authorize, scopes=[PermissionType.READ]),
-) -> Dict[str, Any]:
-    """Get the component side effects for a given pipeline run.
-
-    Args:
-        run_id: ID of the pipeline run to use to get the component side effects.
-        component_id: ID of the component to use to get the component
-            side effects.
-
-    Returns:
-        The component side effects for a given pipeline run.
-    """
-    return {}
-
-
-@router.get(
     "/{run_id}" + PIPELINE_CONFIGURATION,
     response_model=Dict[str, Any],
     responses={401: error_response, 404: error_response, 422: error_response},
@@ -229,7 +201,7 @@ def get_pipeline_configuration(
     Returns:
         The pipeline configuration of the pipeline run.
     """
-    return zen_store().get_run(run_name_or_id=run_id).pipeline_configuration
+    return zen_store().get_run(run_name_or_id=run_id).config.dict()
 
 
 @router.get(

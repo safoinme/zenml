@@ -12,18 +12,34 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Pipeline configuration classes."""
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
-from pydantic import root_validator
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
+from pydantic import root_validator, validator
+
+from zenml.artifacts.external_artifact_config import (
+    ExternalArtifactConfiguration,
+)
 from zenml.config.base_settings import BaseSettings, SettingsOrDict
-from zenml.config.constants import RESOURCE_SETTINGS_KEY
+from zenml.config.constants import DOCKER_SETTINGS_KEY, RESOURCE_SETTINGS_KEY
+from zenml.config.source import Source, convert_source_validator
 from zenml.config.strict_base_model import StrictBaseModel
 from zenml.logger import get_logger
-from zenml.utils import source_utils
+from zenml.models.model_base_model import ModelConfigModel
+from zenml.utils import deprecation_utils
 
 if TYPE_CHECKING:
-    from zenml.config import ResourceSettings
+    from zenml.config import DockerSettings, ResourceSettings
+    from zenml.model.model_config import ModelConfig
 
 logger = get_logger(__name__)
 
@@ -31,7 +47,10 @@ logger = get_logger(__name__)
 class PartialArtifactConfiguration(StrictBaseModel):
     """Class representing a partial input/output artifact configuration."""
 
-    materializer_source: Optional[str] = None
+    materializer_source: Optional[Tuple[Source, ...]] = None
+    # TODO: This could be moved to the `PipelineDeployment` as it's the same
+    # for all steps/outputs
+    default_materializer_source: Optional[Source] = None
 
     @root_validator(pre=True)
     def _remove_deprecated_attributes(
@@ -51,11 +70,54 @@ class PartialArtifactConfiguration(StrictBaseModel):
                 values.pop(deprecated_attribute)
         return values
 
+    @validator("materializer_source", pre=True)
+    def _convert_source(
+        cls,
+        value: Union[None, Source, Dict[str, Any], str, Tuple[Source, ...]],
+    ) -> Optional[Tuple[Source, ...]]:
+        """Converts old source strings to tuples of source objects.
+
+        Args:
+            value: Source string or object.
+
+        Returns:
+            The converted source.
+        """
+        if isinstance(value, str):
+            value = (Source.from_import_path(value),)
+        elif isinstance(value, dict):
+            value = (Source.parse_obj(value),)
+        elif isinstance(value, Source):
+            value = (value,)
+
+        return value
+
 
 class ArtifactConfiguration(PartialArtifactConfiguration):
     """Class representing a complete input/output artifact configuration."""
 
-    materializer_source: str
+    materializer_source: Tuple[Source, ...]
+
+    @validator("materializer_source", pre=True)
+    def _convert_source(
+        cls, value: Union[Source, Dict[str, Any], str, Tuple[Source, ...]]
+    ) -> Tuple[Source, ...]:
+        """Converts old source strings to tuples of source objects.
+
+        Args:
+            value: Source string or object.
+
+        Returns:
+            The converted source.
+        """
+        if isinstance(value, str):
+            value = (Source.from_import_path(value),)
+        elif isinstance(value, dict):
+            value = (Source.parse_obj(value),)
+        elif isinstance(value, Source):
+            value = (value,)
+
+        return value
 
 
 class StepConfigurationUpdate(StrictBaseModel):
@@ -63,13 +125,42 @@ class StepConfigurationUpdate(StrictBaseModel):
 
     name: Optional[str] = None
     enable_cache: Optional[bool] = None
+    enable_artifact_metadata: Optional[bool] = None
+    enable_artifact_visualization: Optional[bool] = None
+    enable_step_logs: Optional[bool] = None
     step_operator: Optional[str] = None
     experiment_tracker: Optional[str] = None
     parameters: Dict[str, Any] = {}
     settings: Dict[str, BaseSettings] = {}
     extra: Dict[str, Any] = {}
+    failure_hook_source: Optional[Source] = None
+    success_hook_source: Optional[Source] = None
+    model_config_model: Optional[ModelConfigModel] = None
 
     outputs: Mapping[str, PartialArtifactConfiguration] = {}
+
+    _convert_source = convert_source_validator(
+        "failure_hook_source", "success_hook_source"
+    )
+    _deprecation_validator = deprecation_utils.deprecate_pydantic_attributes(
+        "name"
+    )
+
+    @property
+    def model_config(self) -> Optional["ModelConfig"]:
+        """Gets a ModelConfig object out of the model config model.
+
+        This is a technical circular import resolver.
+
+        Returns:
+            The model config object, if configured.
+        """
+        if self.model_config_model is None:
+            return None
+
+        from zenml.model.model_config import ModelConfig
+
+        return ModelConfig.parse_obj(self.model_config_model.dict())
 
 
 class PartialStepConfiguration(StepConfigurationUpdate):
@@ -77,8 +168,12 @@ class PartialStepConfiguration(StepConfigurationUpdate):
 
     name: str
     caching_parameters: Mapping[str, Any] = {}
-    inputs: Mapping[str, PartialArtifactConfiguration] = {}
+    external_input_artifacts: Mapping[str, ExternalArtifactConfiguration] = {}
     outputs: Mapping[str, PartialArtifactConfiguration] = {}
+
+    # Override the deprecation validator as we do not want to deprecate the
+    # `name`` attribute on this class.
+    _deprecation_validator = deprecation_utils.deprecate_pydantic_attributes()
 
     @root_validator(pre=True)
     def _remove_deprecated_attributes(
@@ -92,7 +187,7 @@ class PartialStepConfiguration(StepConfigurationUpdate):
         Returns:
             The values dict without deprecated attributes.
         """
-        deprecated_attributes = ["docstring"]
+        deprecated_attributes = ["docstring", "inputs"]
         for deprecated_attribute in deprecated_attributes:
             if deprecated_attribute in values:
                 values.pop(deprecated_attribute)
@@ -102,7 +197,6 @@ class PartialStepConfiguration(StepConfigurationUpdate):
 class StepConfiguration(PartialStepConfiguration):
     """Step configuration class."""
 
-    inputs: Mapping[str, ArtifactConfiguration] = {}
     outputs: Mapping[str, ArtifactConfiguration] = {}
 
     @property
@@ -119,6 +213,20 @@ class StepConfiguration(PartialStepConfiguration):
         )
         return ResourceSettings.parse_obj(model_or_dict)
 
+    @property
+    def docker_settings(self) -> "DockerSettings":
+        """Docker settings of this step configuration.
+
+        Returns:
+            The Docker settings of this step configuration.
+        """
+        from zenml.config import DockerSettings
+
+        model_or_dict: SettingsOrDict = self.settings.get(
+            DOCKER_SETTINGS_KEY, {}
+        )
+        return DockerSettings.parse_obj(model_or_dict)
+
 
 class InputSpec(StrictBaseModel):
     """Step input specification."""
@@ -130,29 +238,13 @@ class InputSpec(StrictBaseModel):
 class StepSpec(StrictBaseModel):
     """Specification of a pipeline."""
 
-    source: str
+    source: Source
     upstream_steps: List[str]
     inputs: Dict[str, InputSpec] = {}
+    # The default value is to ensure compatibility with specs of version <0.2
+    pipeline_parameter_name: str = ""
 
-    @property
-    def module_name(self) -> str:
-        """The step module name.
-
-        Returns:
-            The step module name.
-        """
-        module_name, _ = self.source.rsplit(".", maxsplit=1)
-        return module_name
-
-    @property
-    def class_name(self) -> str:
-        """The step class name.
-
-        Returns:
-            The step class name.
-        """
-        _, class_name = self.source.rsplit(".", maxsplit=1)
-        return class_name
+    _convert_source = convert_source_validator("source")
 
     def __eq__(self, other: Any) -> bool:
         """Returns whether the other object is referring to the same step.
@@ -173,30 +265,13 @@ class StepSpec(StrictBaseModel):
             if self.upstream_steps != other.upstream_steps:
                 return False
 
-            # TODO: rethink this once we have pipeline versioning
-            # for now we don't compare the inputs because that would force
-            # users to re-register their pipeline if they change an output or
-            # input name
-            # if self.inputs != other.inputs:
-            #     return False
+            if self.inputs != other.inputs:
+                return False
 
-            # Remove internal version pin from older sources for backwards
-            # compatibility
-            source = source_utils.remove_internal_version_pin(self.source)
-            other_source = source_utils.remove_internal_version_pin(
-                other.source
-            )
+            if self.pipeline_parameter_name != other.pipeline_parameter_name:
+                return False
 
-            if source == other_source:
-                return True
-
-            if source.endswith(other_source):
-                return True
-
-            if other_source.endswith(source):
-                return True
-
-            return False
+            return self.source.import_path == other.source.import_path
 
         return NotImplemented
 

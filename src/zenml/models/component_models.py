@@ -35,7 +35,8 @@ from zenml.models.base_models import (
     update_model,
 )
 from zenml.models.constants import STR_FIELD_MAX_LENGTH
-from zenml.models.filter_models import ShareableProjectScopedFilterModel
+from zenml.models.filter_models import ShareableWorkspaceScopedFilterModel
+from zenml.models.service_connector_models import ServiceConnectorResponseModel
 from zenml.utils import secret_utils
 
 if TYPE_CHECKING:
@@ -55,6 +56,7 @@ class ComponentBaseModel(BaseModel):
         title="The name of the stack component.",
         max_length=STR_FIELD_MAX_LENGTH,
     )
+
     type: StackComponentType = Field(
         title="The type of the stack component.",
     )
@@ -68,6 +70,22 @@ class ComponentBaseModel(BaseModel):
         title="The stack component configuration.",
     )
 
+    connector_resource_id: Optional[str] = Field(
+        default=None,
+        description="The ID of a specific resource instance to "
+        "gain access to through the connector",
+    )
+
+    labels: Optional[Dict[str, Any]] = Field(
+        default=None,
+        title="The stack component labels.",
+    )
+
+    component_spec_path: Optional[str] = Field(
+        default=None,
+        title="The path to the component spec used for mlstacks deployments.",
+    )
+
 
 # -------- #
 # RESPONSE #
@@ -79,13 +97,18 @@ class ComponentResponseModel(ComponentBaseModel, ShareableResponseModel):
 
     ANALYTICS_FIELDS: ClassVar[List[str]] = ["type", "flavor"]
 
+    connector: Optional["ServiceConnectorResponseModel"] = Field(
+        default=None,
+        title="The service connector linked to this stack component.",
+    )
+
 
 # ------ #
 # FILTER #
 # ------ #
 
 
-class ComponentFilterModel(ShareableProjectScopedFilterModel):
+class ComponentFilterModel(ShareableWorkspaceScopedFilterModel):
     """Model to enable advanced filtering of all ComponentModels.
 
     The Component Model needs additional scoping. As such the `_scope_user`
@@ -95,40 +118,49 @@ class ComponentFilterModel(ShareableProjectScopedFilterModel):
     """
 
     FILTER_EXCLUDE_FIELDS: ClassVar[List[str]] = [
-        *ShareableProjectScopedFilterModel.FILTER_EXCLUDE_FIELDS,
+        *ShareableWorkspaceScopedFilterModel.FILTER_EXCLUDE_FIELDS,
         "scope_type",
     ]
     CLI_EXCLUDE_FIELDS: ClassVar[List[str]] = [
-        *ShareableProjectScopedFilterModel.CLI_EXCLUDE_FIELDS,
+        *ShareableWorkspaceScopedFilterModel.CLI_EXCLUDE_FIELDS,
         "scope_type",
     ]
     scope_type: Optional[str] = Field(
-        None,
+        default=None,
         description="The type to scope this query to.",
     )
 
-    is_shared: Union[bool, str] = Field(
+    is_shared: Optional[Union[bool, str]] = Field(
         default=None, description="If the stack is shared or private"
     )
-    name: str = Field(
+    name: Optional[str] = Field(
         default=None,
         description="Name of the stack component",
     )
-    flavor: str = Field(
+    flavor: Optional[str] = Field(
         default=None,
         description="Flavor of the stack component",
     )
-    type: str = Field(
+    type: Optional[str] = Field(
         default=None,
         description="Type of the stack component",
     )
-    project_id: Union[UUID, str] = Field(
-        default=None, description="Project of the stack"
+    workspace_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Workspace of the stack component"
     )
-    user_id: Union[UUID, str] = Field(None, description="User of the stack")
+    user_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="User of the stack"
+    )
+    connector_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Connector linked to the stack component"
+    )
 
     def set_scope_type(self, component_type: str) -> None:
-        """Set the type of component on which to perform the filtering to scope the response."""
+        """Set the type of component on which to perform the filtering to scope the response.
+
+        Args:
+            component_type: The type of component to scope the query to.
+        """
         self.scope_type = component_type
 
     def generate_filter(
@@ -162,6 +194,11 @@ class ComponentRequestModel(ComponentBaseModel, ShareableRequestModel):
     """Request model for stack components."""
 
     ANALYTICS_FIELDS: ClassVar[List[str]] = ["type", "flavor"]
+
+    connector: Optional[UUID] = Field(
+        default=None,
+        title="The service connector linked to this stack component.",
+    )
 
     @validator("name")
     def name_cant_be_a_secret_reference(cls, name: str) -> str:

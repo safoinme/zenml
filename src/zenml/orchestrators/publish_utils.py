@@ -27,30 +27,12 @@ from zenml.models.step_run_models import (
     StepRunResponseModel,
     StepRunUpdateModel,
 )
+from zenml.utils.pagination_utils import depaginate
 
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from zenml.models.artifact_models import ArtifactRequestModel
-
-
-def publish_output_artifacts(
-    output_artifacts: Dict[str, "ArtifactRequestModel"]
-) -> Dict[str, "UUID"]:
-    """Publishes the given output artifacts.
-
-    Args:
-        output_artifacts: The output artifacts to register.
-
-    Returns:
-        The IDs of the registered output artifacts.
-    """
-    output_artifact_ids = {}
-    client = Client()
-    for name, artifact_model in output_artifacts.items():
-        artifact_response = client.zen_store.create_artifact(artifact_model)
-        output_artifact_ids[name] = artifact_response.id
-    return output_artifact_ids
+    from zenml.metadata.metadata_types import MetadataType
 
 
 def publish_successful_step_run(
@@ -70,7 +52,7 @@ def publish_successful_step_run(
         step_run_update=StepRunUpdateModel(
             status=ExecutionStatus.COMPLETED,
             end_time=datetime.utcnow(),
-            output_artifacts=output_artifact_ids,
+            outputs=output_artifact_ids,
         ),
     )
 
@@ -136,21 +118,23 @@ def get_pipeline_run_status(
     return ExecutionStatus.COMPLETED
 
 
-def update_pipeline_run_status(pipeline_run: PipelineRunResponseModel) -> None:
+def update_pipeline_run_status(
+    pipeline_run: PipelineRunResponseModel, num_steps: int
+) -> None:
     """Updates the status of the current pipeline run.
 
     Args:
         pipeline_run: The model of the current pipeline run.
+        num_steps: The number of steps to be executed.
     """
-    assert pipeline_run.num_steps is not None
     client = Client()
-    steps_in_current_run = client.depaginate(
+    steps_in_current_run = depaginate(
         partial(client.list_run_steps, pipeline_run_id=pipeline_run.id)
     )
 
     new_status = get_pipeline_run_status(
         step_statuses=[step_run.status for step_run in steps_in_current_run],
-        num_steps=pipeline_run.num_steps,
+        num_steps=num_steps,
     )
 
     if new_status != pipeline_run.status:
@@ -160,4 +144,44 @@ def update_pipeline_run_status(pipeline_run: PipelineRunResponseModel) -> None:
 
         Client().zen_store.update_run(
             run_id=pipeline_run.id, run_update=run_update
+        )
+
+
+def publish_pipeline_run_metadata(
+    pipeline_run_id: "UUID",
+    pipeline_run_metadata: Dict["UUID", Dict[str, "MetadataType"]],
+) -> None:
+    """Publishes the given pipeline run metadata.
+
+    Args:
+        pipeline_run_id: The ID of the pipeline run.
+        pipeline_run_metadata: A dictionary mapping stack component IDs to the
+            metadata they created.
+    """
+    client = Client()
+    for stack_component_id, metadata in pipeline_run_metadata.items():
+        client.create_run_metadata(
+            metadata=metadata,
+            pipeline_run_id=pipeline_run_id,
+            stack_component_id=stack_component_id,
+        )
+
+
+def publish_step_run_metadata(
+    step_run_id: "UUID",
+    step_run_metadata: Dict["UUID", Dict[str, "MetadataType"]],
+) -> None:
+    """Publishes the given step run metadata.
+
+    Args:
+        step_run_id: The ID of the step run.
+        step_run_metadata: A dictionary mapping stack component IDs to the
+            metadata they created.
+    """
+    client = Client()
+    for stack_component_id, metadata in step_run_metadata.items():
+        client.create_run_metadata(
+            metadata=metadata,
+            step_run_id=step_run_id,
+            stack_component_id=stack_component_id,
         )

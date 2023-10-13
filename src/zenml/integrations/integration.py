@@ -13,13 +13,14 @@
 #  permissions and limitations under the License.
 """Base and meta classes for ZenML integrations."""
 
-from typing import Any, Dict, List, Tuple, Type, cast
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 import pkg_resources
 
 from zenml.integrations.registry import integration_registry
 from zenml.logger import get_logger
 from zenml.stack.flavor import Flavor
+from zenml.utils.integration_utils import parse_requirement
 
 logger = get_logger(__name__)
 
@@ -62,11 +63,38 @@ class Integration(metaclass=IntegrationMeta):
             True if all required packages are installed, False otherwise.
         """
         try:
-            for r in cls.REQUIREMENTS:
-                pkg_resources.get_distribution(r)
+            for r in cls.get_requirements():
+                name, extras = parse_requirement(r)
+                if name:
+                    dist = pkg_resources.get_distribution(name)
+                    # Check if extras are specified and installed
+                    if extras:
+                        extra_list = extras[1:-1].split(",")
+                        for extra in extra_list:
+                            try:
+                                requirements = dist.requires(extras=[extra])  # type: ignore[arg-type]
+                            except pkg_resources.UnknownExtra as e:
+                                logger.debug("Unknown extra: " + str(e))
+                                return False
+
+                            for ri in requirements:
+                                try:
+                                    pkg_resources.get_distribution(ri)
+                                except IndexError:
+                                    logger.debug(
+                                        f"Unable to find required extra '{ri.project_name}' for "
+                                        f"requirements '{name}' coming from integration '{cls.NAME}'."
+                                    )
+                                    return False
+                else:
+                    logger.debug(
+                        f"Invalid requirement format '{r}' for integration {cls.NAME}."
+                    )
+                    return False
+
             logger.debug(
                 f"Integration {cls.NAME} is installed correctly with "
-                f"requirements {cls.REQUIREMENTS}."
+                f"requirements {cls.get_requirements()}."
             )
             return True
         except pkg_resources.DistributionNotFound as e:
@@ -81,6 +109,18 @@ class Integration(metaclass=IntegrationMeta):
                 f"{str(e)}"
             )
             return False
+
+    @classmethod
+    def get_requirements(cls, target_os: Optional[str] = None) -> List[str]:
+        """Method to get the requirements for the integration.
+
+        Args:
+            target_os: The target operating system to get the requirements for.
+
+        Returns:
+            A list of requirements.
+        """
+        return cls.REQUIREMENTS
 
     @classmethod
     def activate(cls) -> None:

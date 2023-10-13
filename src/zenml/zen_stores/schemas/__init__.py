@@ -15,19 +15,33 @@
 
 from zenml.zen_stores.schemas.artifact_schemas import ArtifactSchema
 from zenml.zen_stores.schemas.base_schemas import BaseSchema, NamedSchema
+from zenml.zen_stores.schemas.code_repository_schemas import (
+    CodeRepositorySchema,
+    CodeReferenceSchema,
+)
+from zenml.zen_stores.schemas.device_schemas import OAuthDeviceSchema
+from zenml.zen_stores.schemas.pipeline_build_schemas import PipelineBuildSchema
 from zenml.zen_stores.schemas.component_schemas import StackComponentSchema
 from zenml.zen_stores.schemas.flavor_schemas import FlavorSchema
 from zenml.zen_stores.schemas.identity_schemas import IdentitySchema
+from zenml.zen_stores.schemas.pipeline_deployment_schemas import (
+    PipelineDeploymentSchema,
+)
 from zenml.zen_stores.schemas.pipeline_run_schemas import PipelineRunSchema
 from zenml.zen_stores.schemas.pipeline_schemas import PipelineSchema
-from zenml.zen_stores.schemas.project_schemas import ProjectSchema
+from zenml.zen_stores.schemas.workspace_schemas import WorkspaceSchema
 from zenml.zen_stores.schemas.role_schemas import (
     RolePermissionSchema,
     RoleSchema,
     TeamRoleAssignmentSchema,
     UserRoleAssignmentSchema,
 )
+from zenml.zen_stores.schemas.run_metadata_schemas import RunMetadataSchema
 from zenml.zen_stores.schemas.schedule_schema import ScheduleSchema
+from zenml.zen_stores.schemas.secret_schemas import SecretSchema
+from zenml.zen_stores.schemas.service_connector_schemas import (
+    ServiceConnectorSchema,
+)
 from zenml.zen_stores.schemas.stack_schemas import (
     StackCompositionSchema,
     StackSchema,
@@ -43,29 +57,50 @@ from zenml.zen_stores.schemas.team_schemas import (
     TeamSchema,
 )
 from zenml.zen_stores.schemas.user_schemas import UserSchema
+from zenml.zen_stores.schemas.logs_schemas import LogsSchema
+from zenml.zen_stores.schemas.model_schemas import (
+    ModelSchema,
+    ModelVersionSchema,
+    ModelVersionArtifactSchema,
+    ModelVersionPipelineRunSchema,
+)
 
 __all__ = [
     "ArtifactSchema",
     "BaseSchema",
-    "NamedSchema",
+    "CodeReferenceSchema",
+    "CodeRepositorySchema",
     "FlavorSchema",
     "IdentitySchema",
+    "LogsSchema",
+    "NamedSchema",
+    "OAuthDeviceSchema",
+    "PipelineBuildSchema",
+    "PipelineDeploymentSchema",
     "PipelineRunSchema",
     "PipelineSchema",
-    "ProjectSchema",
-    "RoleSchema",
     "RolePermissionSchema",
+    "RoleSchema",
+    "RunMetadataSchema",
     "ScheduleSchema",
-    "StackSchema",
+    "SecretSchema",
+    "ServiceConnectorSchema",
     "StackComponentSchema",
     "StackCompositionSchema",
+    "StackSchema",
     "StepRunInputArtifactSchema",
     "StepRunOutputArtifactSchema",
     "StepRunParentsSchema",
     "StepRunSchema",
+    "TeamAssignmentSchema",
     "TeamRoleAssignmentSchema",
     "TeamSchema",
-    "TeamAssignmentSchema",
     "UserRoleAssignmentSchema",
     "UserSchema",
+    "LogsSchema",
+    "ModelSchema",
+    "ModelVersionSchema",
+    "ModelVersionArtifactSchema",
+    "ModelVersionPipelineRunSchema",
+    "WorkspaceSchema",
 ]

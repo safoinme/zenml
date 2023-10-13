@@ -23,58 +23,33 @@ from typing import (
     Optional,
     Type,
     Union,
-    cast,
 )
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from zenml import __version__ as current_zenml_version
-from zenml.enums import ExecutionStatus
+from zenml.config.pipeline_configurations import PipelineConfiguration
+from zenml.enums import ExecutionStatus, LogicalOperators
 from zenml.models.base_models import (
-    ProjectScopedRequestModel,
-    ProjectScopedResponseModel,
+    WorkspaceScopedRequestModel,
+    WorkspaceScopedResponseModel,
 )
 from zenml.models.constants import STR_FIELD_MAX_LENGTH
-from zenml.models.filter_models import ProjectScopedFilterModel
+from zenml.models.filter_models import WorkspaceScopedFilterModel
 
 if TYPE_CHECKING:
     from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
     from sqlmodel import SQLModel
 
-    from zenml.models.pipeline_models import PipelineResponseModel
-    from zenml.models.stack_models import StackResponseModel
-
-
-def get_git_sha(clean: bool = True) -> Optional[str]:
-    """Returns the current git HEAD SHA.
-
-    If the current working directory is not inside a git repo, this will return
-    `None`.
-
-    Args:
-        clean: If `True` and there any untracked files or files in the index or
-            working tree, this function will return `None`.
-
-    Returns:
-        The current git HEAD SHA or `None` if the current working directory is
-        not inside a git repo.
-    """
-    try:
-        from git.exc import InvalidGitRepositoryError
-        from git.repo.base import Repo
-    except ImportError:
-        return None
-
-    try:
-        repo = Repo(search_parent_directories=True)
-    except InvalidGitRepositoryError:
-        return None
-
-    if clean and repo.is_dirty(untracked_files=True):
-        return None
-    return cast(str, repo.head.object.hexsha)
-
+    from zenml.models import (
+        ArtifactResponseModel,
+        PipelineBuildResponseModel,
+        PipelineResponseModel,
+        RunMetadataResponseModel,
+        ScheduleResponseModel,
+        StackResponseModel,
+        StepRunResponseModel,
+    )
 
 # ---- #
 # BASE #
@@ -93,17 +68,16 @@ class PipelineRunBaseModel(BaseModel):
         max_length=STR_FIELD_MAX_LENGTH,
         default=None,
     )
-    schedule_id: Optional[UUID]
-    enable_cache: Optional[bool]
-    start_time: Optional[datetime]
-    end_time: Optional[datetime]
-    status: ExecutionStatus
-    pipeline_configuration: Dict[str, Any]
-    num_steps: Optional[int]
-    zenml_version: Optional[str] = Field(
-        title="ZenML version.",
-        default=current_zenml_version,
-        max_length=STR_FIELD_MAX_LENGTH,
+    start_time: Optional[datetime] = Field(
+        title="The start time of the pipeline run.",
+        default=None,
+    )
+    end_time: Optional[datetime] = Field(
+        title="The end time of the pipeline run.",
+        default=None,
+    )
+    status: ExecutionStatus = Field(
+        title="The status of the pipeline run.",
     )
     client_environment: Dict[str, str] = Field(
         default={},
@@ -119,9 +93,6 @@ class PipelineRunBaseModel(BaseModel):
             "(OS, Python version, etc.)."
         ),
     )
-    git_sha: Optional[str] = Field(
-        default_factory=get_git_sha, max_length=STR_FIELD_MAX_LENGTH
-    )
 
 
 # -------- #
@@ -130,16 +101,54 @@ class PipelineRunBaseModel(BaseModel):
 
 
 class PipelineRunResponseModel(
-    PipelineRunBaseModel, ProjectScopedResponseModel
+    PipelineRunBaseModel, WorkspaceScopedResponseModel
 ):
-    """Pipeline run model with user, project, pipeline, and stack hydrated."""
+    """Pipeline run model with user, workspace, pipeline, and stack hydrated."""
 
-    pipeline: Optional["PipelineResponseModel"] = Field(
-        title="The pipeline this run belongs to."
-    )
     stack: Optional["StackResponseModel"] = Field(
-        title="The stack that was used for this run."
+        default=None, title="The stack that was used for this run."
     )
+    pipeline: Optional["PipelineResponseModel"] = Field(
+        default=None, title="The pipeline this run belongs to."
+    )
+    build: Optional["PipelineBuildResponseModel"] = Field(
+        default=None, title="The pipeline build that was used for this run."
+    )
+    schedule: Optional["ScheduleResponseModel"] = Field(
+        default=None, title="The schedule that was used for this run."
+    )
+    metadata: Dict[str, "RunMetadataResponseModel"] = Field(
+        default={},
+        title="Metadata associated with this pipeline run.",
+    )
+    steps: Dict[str, "StepRunResponseModel"] = Field(
+        default={}, title="The steps of this run."
+    )
+    config: PipelineConfiguration = Field(
+        title="The pipeline configuration used for this pipeline run.",
+    )
+
+    @property
+    def artifacts(self) -> List["ArtifactResponseModel"]:
+        """Get all artifacts that are outputs of steps of this pipeline run.
+
+        Returns:
+            All output artifacts of this pipeline run (including cached ones).
+        """
+        from zenml.utils.artifact_utils import get_artifacts_of_pipeline_run
+
+        return get_artifacts_of_pipeline_run(self)
+
+    @property
+    def produced_artifacts(self) -> List["ArtifactResponseModel"]:
+        """Get all artifacts produced during this pipeline run.
+
+        Returns:
+            A list of all artifacts produced during this pipeline run.
+        """
+        from zenml.utils.artifact_utils import get_artifacts_of_pipeline_run
+
+        return get_artifacts_of_pipeline_run(self, only_produced=True)
 
 
 # ------ #
@@ -147,54 +156,56 @@ class PipelineRunResponseModel(
 # ------ #
 
 
-class PipelineRunFilterModel(ProjectScopedFilterModel):
-    """Model to enable advanced filtering of all Projects."""
+class PipelineRunFilterModel(WorkspaceScopedFilterModel):
+    """Model to enable advanced filtering of all Workspaces."""
 
     FILTER_EXCLUDE_FIELDS: ClassVar[List[str]] = [
-        *ProjectScopedFilterModel.FILTER_EXCLUDE_FIELDS,
+        *WorkspaceScopedFilterModel.FILTER_EXCLUDE_FIELDS,
         "unlisted",
+        "code_repository_id",
     ]
-
-    name: str = Field(
+    name: Optional[str] = Field(
         default=None,
         description="Name of the Pipeline Run",
     )
-    orchestrator_run_id: str = Field(
+    orchestrator_run_id: Optional[str] = Field(
         default=None,
         description="Name of the Pipeline Run within the orchestrator",
     )
-
-    pipeline_id: Union[UUID, str] = Field(
-        default=None, description="Pipeline associated with the Pipeline"
+    pipeline_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Pipeline associated with the Pipeline Run"
     )
-    project_id: Union[UUID, str] = Field(
-        default=None, description="Project of the Pipeline"
+    workspace_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Workspace of the Pipeline Run"
     )
-    user_id: Union[UUID, str] = Field(None, description="User of the Pipeline")
-
-    stack_id: Union[UUID, str] = Field(
+    user_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="User that created the Pipeline Run"
+    )
+    stack_id: Optional[Union[UUID, str]] = Field(
         default=None, description="Stack used for the Pipeline Run"
     )
-    schedule_id: Union[UUID, str] = Field(
+    schedule_id: Optional[Union[UUID, str]] = Field(
         default=None, description="Schedule that triggered the Pipeline Run"
     )
-
-    status: str = Field(
+    build_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Build used for the Pipeline Run"
+    )
+    deployment_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Deployment used for the Pipeline Run"
+    )
+    code_repository_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Code repository used for the Pipeline Run"
+    )
+    status: Optional[str] = Field(
         default=None,
         description="Name of the Pipeline Run",
     )
-    start_time: Union[datetime, str] = Field(
+    start_time: Optional[Union[datetime, str]] = Field(
         default=None, description="Start time for this run"
     )
-    end_time: Union[datetime, str] = Field(
+    end_time: Optional[Union[datetime, str]] = Field(
         default=None, description="End time for this run"
     )
-
-    num_steps: int = Field(
-        default=None,
-        description="Amount of steps in the Pipeline Run",
-    )
-
     unlisted: Optional[bool] = None
 
     def generate_filter(
@@ -209,8 +220,13 @@ class PipelineRunFilterModel(ProjectScopedFilterModel):
             The filter expression for the query.
         """
         from sqlalchemy import and_
+        from sqlmodel import or_
 
         base_filter = super().generate_filter(table)
+
+        operator = (
+            or_ if self.logical_operator == LogicalOperators.OR else and_
+        )
 
         if self.unlisted is not None:
             if self.unlisted is True:
@@ -218,10 +234,50 @@ class PipelineRunFilterModel(ProjectScopedFilterModel):
             else:
                 unlisted_filter = getattr(table, "pipeline_id").is_not(None)
 
-            # TODO: make this right
-            # This needs to be an AND right now to work with the project
-            # scoping of the superclass
-            return and_(base_filter, unlisted_filter)
+            base_filter = operator(base_filter, unlisted_filter)
+
+        from zenml.zen_stores.schemas import (
+            CodeReferenceSchema,
+            PipelineBuildSchema,
+            PipelineDeploymentSchema,
+            PipelineRunSchema,
+            ScheduleSchema,
+            StackSchema,
+        )
+
+        if self.code_repository_id:
+            code_repo_filter = and_(  # type: ignore[type-var]
+                PipelineRunSchema.deployment_id == PipelineDeploymentSchema.id,
+                PipelineDeploymentSchema.code_reference_id
+                == CodeReferenceSchema.id,
+                CodeReferenceSchema.code_repository_id
+                == self.code_repository_id,
+            )
+            base_filter = operator(base_filter, code_repo_filter)
+
+        if self.stack_id:
+            stack_filter = and_(  # type: ignore[type-var]
+                PipelineRunSchema.deployment_id == PipelineDeploymentSchema.id,
+                PipelineDeploymentSchema.stack_id == StackSchema.id,
+                StackSchema.id == self.stack_id,
+            )
+            base_filter = operator(base_filter, stack_filter)
+
+        if self.schedule_id:
+            schedule_filter = and_(  # type: ignore[type-var]
+                PipelineRunSchema.deployment_id == PipelineDeploymentSchema.id,
+                PipelineDeploymentSchema.schedule_id == ScheduleSchema.id,
+                ScheduleSchema.id == self.schedule_id,
+            )
+            base_filter = operator(base_filter, schedule_filter)
+
+        if self.build_id:
+            pipeline_build_filter = and_(  # type: ignore[type-var]
+                PipelineRunSchema.deployment_id == PipelineDeploymentSchema.id,
+                PipelineDeploymentSchema.build_id == PipelineBuildSchema.id,
+                PipelineBuildSchema.id == self.build_id,
+            )
+            base_filter = operator(base_filter, pipeline_build_filter)
 
         return base_filter
 
@@ -231,12 +287,18 @@ class PipelineRunFilterModel(ProjectScopedFilterModel):
 # ------- #
 
 
-class PipelineRunRequestModel(PipelineRunBaseModel, ProjectScopedRequestModel):
-    """Pipeline run model with user, project, pipeline, and stack as UUIDs."""
+class PipelineRunRequestModel(
+    PipelineRunBaseModel, WorkspaceScopedRequestModel
+):
+    """Pipeline run model with user, workspace, pipeline, and stack as UUIDs."""
 
     id: UUID
-    stack: Optional[UUID]  # Might become None if the stack is deleted.
-    pipeline: Optional[UUID]  # Unlisted runs have this as None.
+    deployment: UUID = Field(
+        title="The deployment associated with the pipeline run."
+    )
+    pipeline: Optional[UUID] = Field(
+        title="The pipeline associated with the pipeline run."
+    )
 
 
 # ------ #

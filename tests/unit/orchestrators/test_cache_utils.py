@@ -19,109 +19,38 @@ from uuid import uuid4
 import pytest
 
 from zenml.config.compiler import Compiler
+from zenml.config.source import Source
 from zenml.config.step_configurations import Step
 from zenml.enums import ExecutionStatus, SorterOps
 from zenml.models.page_model import Page
+from zenml.new.pipelines.pipeline import Pipeline
 from zenml.orchestrators import cache_utils
 from zenml.steps import Output, step
 from zenml.steps.base_step import BaseStep
-
-
-def test_is_cache_enabled():
-    """Unit test for `is_cache_enabled()`.
-
-    Tests that:
-    - caching is enabled by default (when neither step nor pipeline set it),
-    - caching is always enabled if explicitly enabled for the step,
-    - caching is always disabled if explicitly disabled for the step,
-    - caching is set to the pipeline cache if not configured for the step.
-    """
-    # Caching is enabled by default
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=None, pipeline_enable_cache=None
-        )
-        is True
-    )
-
-    # Caching is always enabled if explicitly enabled for the step
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=True,
-            pipeline_enable_cache=True,
-        )
-        is True
-    )
-
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=True,
-            pipeline_enable_cache=False,
-        )
-        is True
-    )
-
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=True,
-            pipeline_enable_cache=None,
-        )
-        is True
-    )
-
-    # Caching is always disabled if explicitly disabled for the step
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=False,
-            pipeline_enable_cache=True,
-        )
-        is False
-    )
-
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=False,
-            pipeline_enable_cache=False,
-        )
-        is False
-    )
-
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=False,
-            pipeline_enable_cache=None,
-        )
-        is False
-    )
-
-    # Caching is set to the pipeline cache if not configured for the step
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=None,
-            pipeline_enable_cache=True,
-        )
-        is True
-    )
-
-    assert (
-        cache_utils.is_cache_enabled(
-            step_enable_cache=None,
-            pipeline_enable_cache=False,
-        )
-        is False
-    )
+from zenml.steps.step_invocation import StepInvocation
 
 
 def _compile_step(step: BaseStep) -> Step:
-    # Call the step here to finalize the configuration
-    step()
+    pipeline = Pipeline(name="test_pipeline", entrypoint=lambda: None)
+    invocation = StepInvocation(
+        id="",
+        step=step,
+        input_artifacts={},
+        external_artifacts={},
+        parameters={},
+        upstream_steps=set(),
+        pipeline=pipeline,
+    )
 
     compiler = Compiler()
-    return compiler._compile_step(
-        step=step,
+    return compiler._compile_step_invocation(
+        invocation=invocation,
         pipeline_settings={},
         pipeline_extra={},
         stack=None,
+        step_config=None,
+        pipeline_failure_hook_source=None,
+        pipeline_success_hook_source=None,
     )
 
 
@@ -137,7 +66,7 @@ def generate_cache_key_kwargs(local_artifact_store):
         "step": _compile_step(_cache_test_step()),
         "input_artifact_ids": {"input_1": uuid4()},
         "artifact_store": local_artifact_store,
-        "project_id": uuid4(),
+        "workspace_id": uuid4(),
     }
 
 
@@ -148,10 +77,10 @@ def test_generate_cache_key_is_deterministic(generate_cache_key_kwargs):
     assert key_1 == key_2
 
 
-def test_generate_cache_key_considers_project_id(generate_cache_key_kwargs):
-    """Check that the cache key changes if the project ID changes."""
+def test_generate_cache_key_considers_workspace_id(generate_cache_key_kwargs):
+    """Check that the cache key changes if the workspace ID changes."""
     key_1 = cache_utils.generate_cache_key(**generate_cache_key_kwargs)
-    generate_cache_key_kwargs["project_id"] = uuid4()
+    generate_cache_key_kwargs["workspace_id"] = uuid4()
     key_2 = cache_utils.generate_cache_key(**generate_cache_key_kwargs)
     assert key_1 != key_2
 
@@ -185,7 +114,9 @@ def test_generate_cache_key_considers_step_source(generate_cache_key_kwargs):
     """Check that the cache key changes if the step source changes."""
     key_1 = cache_utils.generate_cache_key(**generate_cache_key_kwargs)
     generate_cache_key_kwargs["step"].spec.__config__.allow_mutation = True
-    generate_cache_key_kwargs["step"].spec.source = "Some.new.source"
+    generate_cache_key_kwargs["step"].spec.source = Source.from_import_path(
+        "some.new.source"
+    )
     key_2 = cache_utils.generate_cache_key(**generate_cache_key_kwargs)
     assert key_1 != key_2
 
@@ -242,8 +173,8 @@ def test_fetching_cached_step_run_queries_cache_candidates(
     mock_list_run_steps = mocker.patch(
         "zenml.client.Client.list_run_steps",
         return_value=Page(
-            page=1,
-            size=1,
+            index=1,
+            max_size=1,
             total_pages=1,
             total=0,
             items=[],
@@ -257,8 +188,8 @@ def test_fetching_cached_step_run_queries_cache_candidates(
     mock_list_run_steps = mocker.patch(
         "zenml.client.Client.list_run_steps",
         return_value=Page(
-            page=1,
-            size=1,
+            index=1,
+            max_size=1,
             total_pages=1,
             total=1,
             items=[cache_candidate],
@@ -268,7 +199,7 @@ def test_fetching_cached_step_run_queries_cache_candidates(
     cached_step = cache_utils.get_cached_step_run(cache_key="cache_key")
     assert cached_step == cache_candidate
     mock_list_run_steps.assert_called_with(
-        project_id=ANY,
+        workspace_id=ANY,
         cache_key="cache_key",
         status=ExecutionStatus.COMPLETED,
         sort_by=f"{SorterOps.DESCENDING}:created",
@@ -277,15 +208,43 @@ def test_fetching_cached_step_run_queries_cache_candidates(
 
 
 def test_fetching_cached_step_run_uses_latest_candidate(
-    clean_client, sample_pipeline_run_request_model, sample_step_request_model
+    clean_client,
+    sample_pipeline_deployment_request_model,
+    sample_pipeline_run_request_model,
+    sample_step_request_model,
 ):
     """Tests that the latest step run with the same cache key is used for
     caching."""
     sample_step_request_model.cache_key = "cache_key"
-    sample_step_request_model.project = clean_client.active_project.id
-    sample_pipeline_run_request_model.project = clean_client.active_project.id
+    sample_step_request_model.workspace = clean_client.active_workspace.id
+    sample_pipeline_deployment_request_model.workspace = (
+        clean_client.active_workspace.id
+    )
+    sample_pipeline_run_request_model.workspace = (
+        clean_client.active_workspace.id
+    )
 
-    # Create a pipeline run and step run
+    sample_step = Step.parse_obj(
+        {
+            "spec": {
+                "source": "module.step_class",
+                "upstream_steps": [],
+                "inputs": {},
+            },
+            "config": {"name": "sample_step"},
+        }
+    )
+    sample_pipeline_deployment_request_model.step_configurations = {
+        "sample_step": sample_step
+    }
+
+    # Create a pipeline deployment, pipeline run and step run
+    deployment_response = clean_client.zen_store.create_deployment(
+        sample_pipeline_deployment_request_model
+    )
+    sample_pipeline_run_request_model.deployment = deployment_response.id
+    sample_step_request_model.deployment = deployment_response.id
+
     clean_client.zen_store.create_run(sample_pipeline_run_request_model)
     sample_step_request_model.pipeline_run_id = (
         sample_pipeline_run_request_model.id

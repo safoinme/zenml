@@ -36,7 +36,14 @@ class AWSIntegration(Integration):
     NAME = AWS
     REQUIREMENTS = [
         "sagemaker==2.117.0",
+        "kubernetes",
+        "aws-profile-manager",
     ]
+
+    @staticmethod
+    def activate() -> None:
+        """Activate the AWS integration."""
+        from zenml.integrations.aws import service_connectors  # noqa
 
     @classmethod
     def flavors(cls) -> List[Type[Flavor]]:

@@ -1,4 +1,4 @@
-#  Copyright (c) ZenML GmbH 2022. All Rights Reserved.
+#  Copyright (c) ZenML GmbH 2023. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -16,34 +16,32 @@
 import inspect
 import os
 from functools import wraps
-from typing import Any, Callable, List, Optional, Type, TypeVar, cast
+from typing import Any, Callable, Optional, Tuple, Type, TypeVar, cast
+from urllib.parse import urlparse
 
-from fastapi import HTTPException
 from pydantic import BaseModel, ValidationError
 
 from zenml.config.global_config import GlobalConfiguration
-from zenml.constants import ENV_ZENML_SERVER_ROOT_URL_PATH
-from zenml.enums import StoreType
-from zenml.exceptions import (
-    EntityExistsError,
-    IllegalOperationError,
-    NotAuthorizedError,
-    StackComponentExistsError,
-    StackExistsError,
+from zenml.config.server_config import ServerConfiguration
+from zenml.constants import (
+    ENV_ZENML_SERVER,
 )
+from zenml.enums import ServerProviderType
+from zenml.exceptions import OAuthError
 from zenml.logger import get_logger
-from zenml.zen_stores.base_zen_store import BaseZenStore
+from zenml.zen_server.deploy.deployment import ServerDeployment
+from zenml.zen_server.deploy.local.local_zen_server import (
+    LocalServerDeploymentConfig,
+)
+from zenml.zen_server.exceptions import http_exception_from_error
+from zenml.zen_stores.sql_zen_store import SqlZenStore
 
 logger = get_logger(__name__)
 
-
-ROOT_URL_PATH = os.getenv(ENV_ZENML_SERVER_ROOT_URL_PATH, "")
-
-
-_zen_store: Optional[BaseZenStore] = None
+_zen_store: Optional["SqlZenStore"] = None
 
 
-def zen_store() -> BaseZenStore:
+def zen_store() -> "SqlZenStore":
     """Initialize the ZenML Store.
 
     Returns:
@@ -64,102 +62,119 @@ def initialize_zen_store() -> None:
     Raises:
         ValueError: If the ZenML Store is using a REST back-end.
     """
-    global _zen_store
-
     logger.debug("Initializing ZenML Store for FastAPI...")
-    _zen_store = GlobalConfiguration().zen_store
 
-    # We override track_analytics=False because we do not
-    # want to track anything server side.
-    _zen_store.track_analytics = False
+    # Use an environment variable to flag the instance as a server
+    os.environ[ENV_ZENML_SERVER] = "true"
 
-    if _zen_store.type == StoreType.REST:
+    zen_store_ = GlobalConfiguration().zen_store
+
+    if not isinstance(zen_store_, SqlZenStore):
         raise ValueError(
             "Server cannot be started with a REST store type. Make sure you "
             "configure ZenML to use a non-networked store backend "
             "when trying to start the ZenML Server."
         )
 
-
-class ErrorModel(BaseModel):
-    """Base class for error responses."""
-
-    detail: Any
+    global _zen_store
+    _zen_store = zen_store_
 
 
-error_response = dict(model=ErrorModel)
+_server_config: Optional[ServerConfiguration] = None
 
 
-def error_detail(error: Exception) -> List[str]:
-    """Convert an Exception to API representation.
-
-    Args:
-        error: Exception to convert.
+def server_config() -> ServerConfiguration:
+    """Returns the ZenML Server configuration.
 
     Returns:
-        List of strings representing the error.
+        The ZenML Server configuration.
     """
-    return [type(error).__name__] + [str(a) for a in error.args]
+    global _server_config
+    if _server_config is None:
+        _server_config = ServerConfiguration.get_server_config()
+    return _server_config
 
 
-def not_authorized(error: Exception) -> HTTPException:
-    """Convert an Exception to a HTTP 401 response.
+def get_active_deployment(local: bool = False) -> Optional["ServerDeployment"]:
+    """Get the active local or remote server deployment.
+
+    Call this function to retrieve the local or remote server deployment that
+    was last provisioned on this machine.
 
     Args:
-        error: Exception to convert.
+        local: Whether to return the local active deployment or the remote one.
 
     Returns:
-        HTTPException with status code 401.
+        The local or remote active server deployment or None, if no deployment
+        was found.
     """
-    return HTTPException(status_code=401, detail=error_detail(error))
+    from zenml.zen_server.deploy.deployer import ServerDeployer
+
+    deployer = ServerDeployer()
+    if local:
+        servers = deployer.list_servers(provider_type=ServerProviderType.LOCAL)
+        if not servers:
+            servers = deployer.list_servers(
+                provider_type=ServerProviderType.DOCKER
+            )
+    else:
+        servers = deployer.list_servers()
+
+    if not servers:
+        return None
+
+    for server in servers:
+        if server.config.provider in [
+            ServerProviderType.LOCAL,
+            ServerProviderType.DOCKER,
+        ]:
+            if local:
+                return server
+        elif not local:
+            return server
+
+    return None
 
 
-def forbidden(error: Exception) -> HTTPException:
-    """Convert an Exception to a HTTP 403 response.
+def get_active_server_details() -> Tuple[str, Optional[int]]:
+    """Get the URL of the current ZenML Server.
 
-    Args:
-        error: Exception to convert.
+    When multiple servers are present, the following precedence is used to
+    determine which server to use:
+    - If the client is connected to a server, that server has precedence.
+    - If no server is connected, a server that was deployed remotely has
+        precedence over a server that was deployed locally.
 
     Returns:
-        HTTPException with status code 403.
+        The URL and port of the currently active server.
+
+    Raises:
+        RuntimeError: If no server is active.
     """
-    return HTTPException(status_code=403, detail=error_detail(error))
+    # Check for connected servers first
+    gc = GlobalConfiguration()
+    if not gc.uses_default_store() and gc.store is not None:
+        logger.debug("Getting URL of connected server.")
+        parsed_url = urlparse(gc.store.url)
+        return f"{parsed_url.scheme}://{parsed_url.hostname}", parsed_url.port
+    # Else, check for deployed servers
+    server = get_active_deployment(local=False)
+    if server:
+        logger.debug("Getting URL of remote server.")
+    else:
+        server = get_active_deployment(local=True)
+        logger.debug("Getting URL of local server.")
 
+    if server and server.status and server.status.url:
+        if isinstance(server.config, LocalServerDeploymentConfig):
+            return server.status.url, server.config.port
+        return server.status.url, None
 
-def not_found(error: Exception) -> HTTPException:
-    """Convert an Exception to a HTTP 404 response.
-
-    Args:
-        error: Exception to convert.
-
-    Returns:
-        HTTPException with status code 404.
-    """
-    return HTTPException(status_code=404, detail=error_detail(error))
-
-
-def conflict(error: Exception) -> HTTPException:
-    """Convert an Exception to a HTTP 409 response.
-
-    Args:
-        error: Exception to convert.
-
-    Returns:
-        HTTPException with status code 409.
-    """
-    return HTTPException(status_code=409, detail=error_detail(error))
-
-
-def unprocessable(error: Exception) -> HTTPException:
-    """Convert an Exception to a HTTP 409 response.
-
-    Args:
-        error: Exception to convert.
-
-    Returns:
-        HTTPException with status code 422.
-    """
-    return HTTPException(status_code=422, detail=error_detail(error))
+    raise RuntimeError(
+        "ZenML is not connected to any server right now. Please use "
+        "`zenml connect` to connect to a server or spin up a new local server "
+        "via `zenml up`."
+    )
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -177,27 +192,37 @@ def handle_exceptions(func: F) -> F:
 
     @wraps(func)
     def decorated(*args: Any, **kwargs: Any) -> Any:
+        # These imports can't happen at module level as this module is also
+        # used by the CLI when installed without the `server` extra
+        from fastapi import HTTPException
+        from fastapi.responses import JSONResponse
+
+        from zenml.zen_server.auth import AuthContext, set_auth_context
+
+        for arg in args:
+            if isinstance(arg, AuthContext):
+                set_auth_context(arg)
+                break
+        else:
+            for _, arg in kwargs.items():
+                if isinstance(arg, AuthContext):
+                    set_auth_context(arg)
+                    break
+
         try:
             return func(*args, **kwargs)
-        except NotAuthorizedError as error:
-            logger.exception("Authorization error")
-            raise not_authorized(error) from error
-        except KeyError as error:
-            logger.exception("Entity not found")
-            raise not_found(error) from error
-        except (
-            StackExistsError,
-            StackComponentExistsError,
-            EntityExistsError,
-        ) as error:
-            logger.exception("Entity already exists")
-            raise conflict(error) from error
-        except IllegalOperationError as error:
-            logger.exception("Illegal operation")
-            raise forbidden(error) from error
-        except ValueError as error:
-            logger.exception("Validation error")
-            raise unprocessable(error) from error
+        except OAuthError as error:
+            # The OAuthError is special because it needs to have a JSON response
+            return JSONResponse(
+                status_code=error.status_code,
+                content=error.to_dict(),
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.exception("API error")
+            http_exception = http_exception_from_error(error)
+            raise http_exception
 
     return cast(F, decorated)
 
@@ -225,6 +250,8 @@ def make_dependable(cls: Type[BaseModel]) -> Callable[..., Any]:
     """
 
     def init_cls_and_handle_errors(*args: Any, **kwargs: Any) -> BaseModel:
+        from fastapi import HTTPException
+
         try:
             inspect.signature(init_cls_and_handle_errors).bind(*args, **kwargs)
             return cls(*args, **kwargs)
@@ -236,3 +263,27 @@ def make_dependable(cls: Type[BaseModel]) -> Callable[..., Any]:
     init_cls_and_handle_errors.__signature__ = inspect.signature(cls)  # type: ignore[attr-defined]
 
     return init_cls_and_handle_errors
+
+
+def get_ip_location(ip_address: str) -> Tuple[str, str, str]:
+    """Get the location of the given IP address.
+
+    Args:
+        ip_address: The IP address to get the location for.
+
+    Returns:
+        A tuple of city, region, country.
+    """
+    import ipinfo  # type: ignore[import]
+
+    try:
+        handler = ipinfo.getHandler()
+        details = handler.getDetails(ip_address)
+        return (
+            details.city,
+            details.region,
+            details.country_name,
+        )
+    except Exception:
+        logger.exception(f"Could not get IP location for {ip_address}.")
+        return "", "", ""

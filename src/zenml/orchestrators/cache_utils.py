@@ -30,35 +30,11 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def is_cache_enabled(
-    step_enable_cache: Optional[bool],
-    pipeline_enable_cache: Optional[bool],
-) -> bool:
-    """Checks if caching is enabled for a step run.
-
-    This is the case if:
-    - caching is explicitly enabled for the step, or
-    - caching is neither explicitly disabled for the step nor the pipeline.
-
-    Args:
-        step_enable_cache: The enable cache parameter of the step.
-        pipeline_enable_cache: The enable cache parameter of the pipeline.
-
-    Returns:
-        True if caching is enabled, False otherwise.
-    """
-    if step_enable_cache is not None:
-        return step_enable_cache
-    if pipeline_enable_cache is not None:
-        return pipeline_enable_cache
-    return True
-
-
 def generate_cache_key(
     step: "Step",
     input_artifact_ids: Dict[str, "UUID"],
     artifact_store: "BaseArtifactStore",
-    project_id: "UUID",
+    workspace_id: "UUID",
 ) -> str:
     """Generates a cache key for a step run.
 
@@ -66,7 +42,7 @@ def generate_cache_key(
     runs are identical and can be cached.
 
     The cache key is a MD5 hash of:
-    - the project ID,
+    - the workspace ID,
     - the artifact store ID and path,
     - the source code that defines the step,
     - the parameters of the step,
@@ -79,22 +55,25 @@ def generate_cache_key(
         step: The step to generate the cache key for.
         input_artifact_ids: The input artifact IDs for the step.
         artifact_store: The artifact store of the active stack.
-        project_id: The ID of the active project.
+        workspace_id: The ID of the active workspace.
 
     Returns:
         A cache key.
     """
-    hash_ = hashlib.md5()
+    hash_ = hashlib.md5()  # nosec
 
-    # Project ID
-    hash_.update(project_id.bytes)
+    # Workspace ID
+    hash_.update(workspace_id.bytes)
 
     # Artifact store ID and path
     hash_.update(artifact_store.id.bytes)
     hash_.update(artifact_store.path.encode())
 
-    # Step source code
-    hash_.update(step.spec.source.encode())
+    # Step source. This currently only uses the string representation of the
+    # source (e.g. my_module.step_class) instead of the full source to keep
+    # the caching behavior of previous versions and to not invalidate caching
+    # when committing some unrelated files
+    hash_.update(step.spec.source.import_path.encode())
 
     # Step parameters
     for key, value in sorted(step.config.parameters.items()):
@@ -109,7 +88,8 @@ def generate_cache_key(
     # Output artifacts and materializers
     for name, output in step.config.outputs.items():
         hash_.update(name.encode())
-        hash_.update(output.materializer_source.encode())
+        for source in output.materializer_source:
+            hash_.update(source.import_path.encode())
 
     # Custom caching parameters
     for key, value in sorted(step.config.caching_parameters.items()):
@@ -123,7 +103,7 @@ def get_cached_step_run(cache_key: str) -> Optional["StepRunResponseModel"]:
     """If a given step can be cached, get the corresponding existing step run.
 
     A step run can be cached if there is an existing step run in the same
-    project which has the same cache key and was successfully executed.
+    workspace which has the same cache key and was successfully executed.
 
     Args:
         cache_key: The cache key of the step.
@@ -134,7 +114,7 @@ def get_cached_step_run(cache_key: str) -> Optional["StepRunResponseModel"]:
     client = Client()
 
     cache_candidates = client.list_run_steps(
-        project_id=client.active_project.id,
+        workspace_id=client.active_workspace.id,
         cache_key=cache_key,
         status=ExecutionStatus.COMPLETED,
         sort_by=f"{SorterOps.DESCENDING}:created",

@@ -22,7 +22,7 @@ from zenml.cli.integration import integration
 from zenml.integrations.registry import integration_registry
 
 NOT_AN_INTEGRATION = ["zenflow", "Anti-Tensorflow", "123"]
-INTEGRATIONS = ["airflow", "plotly", "tensorflow"]
+INTEGRATIONS = ["airflow", "sklearn", "tensorflow"]
 
 
 def test_integration_list() -> None:
@@ -213,7 +213,7 @@ def test_integration_requirements_exporting(tmp_path) -> None:
     from zenml.integrations.kubeflow import KubeflowIntegration
     from zenml.integrations.mlflow import MlflowIntegration
 
-    flow_integration_requirements = (
+    flow_integration_requirements = set(
         AirflowIntegration.REQUIREMENTS
         + KubeflowIntegration.REQUIREMENTS
         + MlflowIntegration.REQUIREMENTS
@@ -228,7 +228,7 @@ def test_integration_requirements_exporting(tmp_path) -> None:
     runner = CliRunner()
     result = runner.invoke(integration, command)
     assert result.exit_code == 0
-    assert result.output == " ".join(flow_integration_requirements)
+    assert set(result.output.split(" ")) == flow_integration_requirements
 
     output_file = str(tmp_path / "requirements.txt")
     command += ["--output-file", output_file]
@@ -237,4 +237,6 @@ def test_integration_requirements_exporting(tmp_path) -> None:
     assert result.exit_code == 0
 
     with open(output_file, "r") as f:
-        assert f.read() == "\n".join(flow_integration_requirements)
+        assert (
+            set(f.read().strip().split("\n")) == flow_integration_requirements
+        )

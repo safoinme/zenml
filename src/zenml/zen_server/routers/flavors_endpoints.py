@@ -19,11 +19,17 @@ from fastapi import APIRouter, Depends, Security
 
 from zenml.constants import API, FLAVORS, VERSION_1
 from zenml.enums import PermissionType
-from zenml.models import FlavorFilterModel, FlavorResponseModel
+from zenml.exceptions import IllegalOperationError
+from zenml.models import (
+    FlavorFilterModel,
+    FlavorRequestModel,
+    FlavorResponseModel,
+    FlavorUpdateModel,
+)
 from zenml.models.page_model import Page
 from zenml.zen_server.auth import AuthContext, authorize
+from zenml.zen_server.exceptions import error_response
 from zenml.zen_server.utils import (
-    error_response,
     handle_exceptions,
     make_dependable,
     zen_store,
@@ -83,6 +89,71 @@ def get_flavor(
     return flavor
 
 
+@router.post(
+    "",
+    response_model=FlavorResponseModel,
+    responses={401: error_response, 409: error_response, 422: error_response},
+)
+@handle_exceptions
+def create_flavor(
+    flavor: FlavorRequestModel,
+    auth_context: AuthContext = Security(
+        authorize, scopes=[PermissionType.WRITE]
+    ),
+) -> FlavorResponseModel:
+    """Creates a stack component flavor.
+
+    Args:
+        flavor: Stack component flavor to register.
+        auth_context: Authentication context.
+
+    Returns:
+        The created stack component flavor.
+
+    Raises:
+        IllegalOperationError: If the workspace or user specified in the stack
+            component flavor does not match the current workspace or authenticated
+            user.
+    """
+    if flavor.user != auth_context.user.id:
+        raise IllegalOperationError(
+            "Creating flavors for a user other than yourself "
+            "is not supported."
+        )
+
+    created_flavor = zen_store().create_flavor(
+        flavor=flavor,
+    )
+    return created_flavor
+
+
+@router.put(
+    "/{team_id}",
+    response_model=FlavorResponseModel,
+    responses={401: error_response, 409: error_response, 422: error_response},
+)
+@handle_exceptions
+def update_flavor(
+    flavor_id: UUID,
+    flavor_update: FlavorUpdateModel,
+    _: AuthContext = Security(authorize, scopes=[PermissionType.WRITE]),
+) -> FlavorResponseModel:
+    """Updates a flavor.
+
+    # noqa: DAR401
+
+    Args:
+        flavor_id: ID of the team to update.
+        flavor_update: Team update.
+
+    Returns:
+        The updated flavor.
+    """
+    return zen_store().update_flavor(
+        flavor_id=flavor_id, flavor_update=flavor_update
+    )
+
+
 @router.delete(
     "/{flavor_id}",
     responses={401: error_response, 404: error_response, 422: error_response},
@@ -98,3 +169,19 @@ def delete_flavor(
         flavor_id: ID of the flavor.
     """
     zen_store().delete_flavor(flavor_id)
+
+
+@router.patch(
+    "/sync",
+    responses={401: error_response, 404: error_response, 422: error_response},
+)
+@handle_exceptions
+def sync_flavors(
+    _: AuthContext = Security(authorize, scopes=[PermissionType.WRITE]),
+) -> None:
+    """Purge all in-built and integration flavors from the DB and sync.
+
+    Returns:
+        None if successful. Raises an exception otherwise.
+    """
+    return zen_store()._sync_flavors()

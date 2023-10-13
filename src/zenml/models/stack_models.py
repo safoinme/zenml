@@ -14,7 +14,7 @@
 """Models representing stacks."""
 
 import json
-from typing import Any, Dict, List, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -27,7 +27,7 @@ from zenml.models.base_models import (
 )
 from zenml.models.component_models import ComponentResponseModel
 from zenml.models.constants import STR_FIELD_MAX_LENGTH
-from zenml.models.filter_models import ShareableProjectScopedFilterModel
+from zenml.models.filter_models import ShareableWorkspaceScopedFilterModel
 
 # ---- #
 # BASE #
@@ -46,6 +46,11 @@ class StackBaseModel(BaseModel):
         max_length=STR_FIELD_MAX_LENGTH,
     )
 
+    stack_spec_path: Optional[str] = Field(
+        default=None,
+        title="The path to the stack spec used for mlstacks deployments.",
+    )
+
 
 # -------- #
 # RESPONSE #
@@ -53,7 +58,7 @@ class StackBaseModel(BaseModel):
 
 
 class StackResponseModel(StackBaseModel, ShareableResponseModel):
-    """Stack model with Components, User and Project fully hydrated."""
+    """Stack model with Components, User and Workspace fully hydrated."""
 
     components: Dict[StackComponentType, List[ComponentResponseModel]] = Field(
         title="A mapping of stack component types to the actual"
@@ -112,7 +117,7 @@ class StackResponseModel(StackBaseModel, ShareableResponseModel):
 # ------ #
 
 
-class StackFilterModel(ShareableProjectScopedFilterModel):
+class StackFilterModel(ShareableWorkspaceScopedFilterModel):
     """Model to enable advanced filtering of all StackModels.
 
     The Stack Model needs additional scoping. As such the `_scope_user` field
@@ -121,19 +126,31 @@ class StackFilterModel(ShareableProjectScopedFilterModel):
     scoping.
     """
 
-    is_shared: Union[bool, str] = Field(
+    # `component_id` refers to a relationship through a link-table
+    #  rather than a field in the db, hence it needs to be handled
+    #  explicitly
+    FILTER_EXCLUDE_FIELDS: ClassVar[List[str]] = [
+        *ShareableWorkspaceScopedFilterModel.FILTER_EXCLUDE_FIELDS,
+        "component_id",  # This is a relationship, not a field
+    ]
+
+    is_shared: Optional[Union[bool, str]] = Field(
         default=None, description="If the stack is shared or private"
     )
-    name: str = Field(
+    name: Optional[str] = Field(
         default=None,
         description="Name of the stack",
     )
-    description: str = Field(None, description="Description of the stack")
-    project_id: Union[UUID, str] = Field(
-        default=None, description="Project of the stack"
+    description: Optional[str] = Field(
+        default=None, description="Description of the stack"
     )
-    user_id: Union[UUID, str] = Field(None, description="User of the stack")
-    component_id: Union[UUID, str] = Field(
+    workspace_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Workspace of the stack"
+    )
+    user_id: Optional[Union[UUID, str]] = Field(
+        default=None, description="User of the stack"
+    )
+    component_id: Optional[Union[UUID, str]] = Field(
         default=None, description="Component in the stack"
     )
 
@@ -144,11 +161,12 @@ class StackFilterModel(ShareableProjectScopedFilterModel):
 
 
 class StackRequestModel(StackBaseModel, ShareableRequestModel):
-    """Stack model with components, user and project as UUIDs."""
+    """Stack model with components, user and workspace as UUIDs."""
 
-    components: Dict[StackComponentType, List[UUID]] = Field(
+    components: Optional[Dict[StackComponentType, List[UUID]]] = Field(
+        default=None,
         title="A mapping of stack component types to the actual"
-        "instances of components of this type."
+        "instances of components of this type.",
     )
 
     @property
@@ -158,6 +176,8 @@ class StackRequestModel(StackBaseModel, ShareableRequestModel):
         Returns:
             True if the stack is valid, False otherwise.
         """
+        if not self.components:
+            return False
         return (
             StackComponentType.ARTIFACT_STORE in self.components
             and StackComponentType.ORCHESTRATOR in self.components

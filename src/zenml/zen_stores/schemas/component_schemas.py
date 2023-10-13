@@ -27,13 +27,18 @@ from zenml.models.component_models import (
     ComponentUpdateModel,
 )
 from zenml.zen_stores.schemas.base_schemas import ShareableSchema
-from zenml.zen_stores.schemas.project_schemas import ProjectSchema
 from zenml.zen_stores.schemas.schema_utils import build_foreign_key_field
+from zenml.zen_stores.schemas.service_connector_schemas import (
+    ServiceConnectorSchema,
+)
 from zenml.zen_stores.schemas.stack_schemas import StackCompositionSchema
 from zenml.zen_stores.schemas.user_schemas import UserSchema
+from zenml.zen_stores.schemas.workspace_schemas import WorkspaceSchema
 
 if TYPE_CHECKING:
     from zenml.zen_stores.schemas import StackSchema
+    from zenml.zen_stores.schemas.logs_schemas import LogsSchema
+    from zenml.zen_stores.schemas.run_metadata_schemas import RunMetadataSchema
 
 if TYPE_CHECKING:
     from zenml.zen_stores.schemas import ScheduleSchema
@@ -47,16 +52,18 @@ class StackComponentSchema(ShareableSchema, table=True):
     type: StackComponentType
     flavor: str
     configuration: bytes
+    labels: Optional[bytes]
+    component_spec_path: Optional[str]
 
-    project_id: UUID = build_foreign_key_field(
+    workspace_id: UUID = build_foreign_key_field(
         source=__tablename__,
-        target=ProjectSchema.__tablename__,
-        source_column="project_id",
+        target=WorkspaceSchema.__tablename__,
+        source_column="workspace_id",
         target_column="id",
         ondelete="CASCADE",
         nullable=False,
     )
-    project: "ProjectSchema" = Relationship(back_populates="components")
+    workspace: "WorkspaceSchema" = Relationship(back_populates="components")
 
     user_id: Optional[UUID] = build_foreign_key_field(
         source=__tablename__,
@@ -75,6 +82,29 @@ class StackComponentSchema(ShareableSchema, table=True):
         back_populates="orchestrator",
     )
 
+    run_metadata: List["RunMetadataSchema"] = Relationship(
+        back_populates="stack_component",
+    )
+
+    run_or_step_logs: Optional["LogsSchema"] = Relationship(
+        back_populates="artifact_store",
+        sa_relationship_kwargs={"cascade": "delete", "uselist": False},
+    )
+
+    connector_id: Optional[UUID] = build_foreign_key_field(
+        source=__tablename__,
+        target=ServiceConnectorSchema.__tablename__,
+        source_column="connector_id",
+        target_column="id",
+        ondelete="SET NULL",
+        nullable=True,
+    )
+    connector: Optional["ServiceConnectorSchema"] = Relationship(
+        back_populates="components"
+    )
+
+    connector_resource_id: Optional[str]
+
     def update(
         self, component_update: ComponentUpdateModel
     ) -> "StackComponentSchema":
@@ -87,11 +117,15 @@ class StackComponentSchema(ShareableSchema, table=True):
             The updated `StackComponentSchema`.
         """
         for field, value in component_update.dict(
-            exclude_unset=True, exclude={"project", "user"}
+            exclude_unset=True, exclude={"workspace", "user", "connector"}
         ).items():
             if field == "configuration":
                 self.configuration = base64.b64encode(
                     json.dumps(component_update.configuration).encode("utf-8")
+                )
+            elif field == "labels":
+                self.labels = base64.b64encode(
+                    json.dumps(component_update.labels).encode("utf-8")
                 )
             else:
                 setattr(self, field, value)
@@ -113,11 +147,17 @@ class StackComponentSchema(ShareableSchema, table=True):
             type=self.type,
             flavor=self.flavor,
             user=self.user.to_model(True) if self.user else None,
-            project=self.project.to_model(),
+            workspace=self.workspace.to_model(),
+            connector=self.connector.to_model() if self.connector else None,
+            connector_resource_id=self.connector_resource_id,
             is_shared=self.is_shared,
             configuration=json.loads(
                 base64.b64decode(self.configuration).decode()
             ),
+            labels=json.loads(base64.b64decode(self.labels).decode())
+            if self.labels
+            else None,
+            component_spec_path=self.component_spec_path,
             created=self.created,
             updated=self.updated,
         )

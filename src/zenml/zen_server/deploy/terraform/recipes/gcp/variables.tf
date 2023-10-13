@@ -45,6 +45,12 @@ variable "kubectl_config_path" {
   type        = string
 }
 
+variable "analytics_opt_in" {
+  description = "The flag to enable/disable analytics"
+  default     = true
+  type        = bool
+}
+
 # If you want a new CloudSQL, choose a name and a password. If you already
 # have an instance, provide the name and the password here too.
 variable "database_username" {
@@ -119,22 +125,25 @@ variable "database_ssl_verify_server_cert" {
   type        = bool
 }
 
-variable "ingress_path" {
-  description = "The path on the Ingress URL to expose ZenML at"
-  default     = "zenml"
-  type        = string
+
+# Enable secrets manager API. Listing services might need elevated permissions.
+# Disable this if you don't have the ListServices permission.
+variable "enable_secrets_manager_api" {
+  description = "Enable the secrets manager API"
+  default     = true
+  type        = bool
 }
 
 # set to true if you don't already have an nginx ingress
 # controller in your cluster
 variable "create_ingress_controller" {
-  description = "set to true  if you want the recipe to create an ingress controller in your cluster"  
+  description = "set to true  if you want the recipe to create an ingress controller in your cluster"
   default     = false
   type        = bool
 }
 
 # if you already have an ingress controller, supply it's URL
-variable "ingress_controller_hostname" {
+variable "ingress_controller_ip" {
   description = "The hostname for the ingress controller on your cluster"
   default     = ""
   type        = string
@@ -155,16 +164,15 @@ variable "ingress_tls_secret_name" {
   type        = string
 }
 
+variable "zenmlserver_image_repo" {
+  description = "The repository to use for the zenmlserver docker image."
+  default     = "zenmldocker/zenml-server"
+  type        = string
+}
 variable "zenmlserver_image_tag" {
   description = "The tag to use for the zenmlserver docker image."
   default     = "latest"
-  type        = string   
-}
-
-variable "zenmlinit_image_tag" {
-  description = "The tag to use for the zenml init docker image."
-  default     = "latest"
-  type        = string   
+  type        = string
 }
 
 # variables for creating a ZenML stack configuration file

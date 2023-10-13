@@ -15,6 +15,7 @@
 
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
+from uuid import UUID
 
 from sqlmodel import Field, Relationship
 
@@ -25,10 +26,21 @@ from zenml.zen_stores.schemas.team_schemas import TeamAssignmentSchema
 if TYPE_CHECKING:
     from zenml.zen_stores.schemas import (
         ArtifactSchema,
+        CodeRepositorySchema,
         FlavorSchema,
+        ModelSchema,
+        ModelVersionArtifactSchema,
+        ModelVersionPipelineRunSchema,
+        ModelVersionSchema,
+        OAuthDeviceSchema,
+        PipelineBuildSchema,
+        PipelineDeploymentSchema,
         PipelineRunSchema,
         PipelineSchema,
+        RunMetadataSchema,
         ScheduleSchema,
+        SecretSchema,
+        ServiceConnectorSchema,
         StackComponentSchema,
         StackSchema,
         StepRunSchema,
@@ -47,8 +59,9 @@ class UserSchema(NamedSchema, table=True):
     active: bool
     password: Optional[str] = Field(nullable=True)
     activation_token: Optional[str] = Field(nullable=True)
-
+    hub_token: Optional[str] = Field(nullable=True)
     email_opted_in: Optional[bool] = Field(nullable=True)
+    external_user_id: Optional[UUID] = Field(nullable=True)
 
     teams: List["TeamSchema"] = Relationship(
         back_populates="users", link_model=TeamAssignmentSchema
@@ -67,7 +80,40 @@ class UserSchema(NamedSchema, table=True):
     )
     runs: List["PipelineRunSchema"] = Relationship(back_populates="user")
     step_runs: List["StepRunSchema"] = Relationship(back_populates="user")
+    builds: List["PipelineBuildSchema"] = Relationship(back_populates="user")
     artifacts: List["ArtifactSchema"] = Relationship(back_populates="user")
+    run_metadata: List["RunMetadataSchema"] = Relationship(
+        back_populates="user"
+    )
+    secrets: List["SecretSchema"] = Relationship(
+        back_populates="user",
+        sa_relationship_kwargs={"cascade": "delete"},
+    )
+    deployments: List["PipelineDeploymentSchema"] = Relationship(
+        back_populates="user",
+    )
+    code_repositories: List["CodeRepositorySchema"] = Relationship(
+        back_populates="user",
+    )
+    service_connectors: List["ServiceConnectorSchema"] = Relationship(
+        back_populates="user",
+    )
+    models: List["ModelSchema"] = Relationship(
+        back_populates="user",
+    )
+    model_versions: List["ModelVersionSchema"] = Relationship(
+        back_populates="user",
+    )
+    model_versions_artifacts_links: List[
+        "ModelVersionArtifactSchema"
+    ] = Relationship(back_populates="user")
+    model_versions_pipeline_runs_links: List[
+        "ModelVersionPipelineRunSchema"
+    ] = Relationship(back_populates="user")
+    auth_devices: List["OAuthDeviceSchema"] = Relationship(
+        back_populates="user",
+        sa_relationship_kwargs={"cascade": "delete"},
+    )
 
     @classmethod
     def from_request(cls, model: UserRequestModel) -> "UserSchema":
@@ -85,6 +131,9 @@ class UserSchema(NamedSchema, table=True):
             active=model.active,
             password=model.create_hashed_password(),
             activation_token=model.create_hashed_activation_token(),
+            external_user_id=model.external_user_id,
+            email_opted_in=model.email_opted_in,
+            email=model.email,
         )
 
     def update(self, user_update: UserUpdateModel) -> "UserSchema":
@@ -126,10 +175,12 @@ class UserSchema(NamedSchema, table=True):
         if _block_recursion:
             return UserResponseModel(
                 id=self.id,
+                external_user_id=self.external_user_id,
                 name=self.name,
                 active=self.active,
                 email_opted_in=self.email_opted_in,
                 email=self.email if include_private else None,
+                hub_token=self.hub_token if include_private else None,
                 full_name=self.full_name,
                 created=self.created,
                 updated=self.updated,
@@ -137,10 +188,12 @@ class UserSchema(NamedSchema, table=True):
         else:
             return UserResponseModel(
                 id=self.id,
+                external_user_id=self.external_user_id,
                 name=self.name,
                 active=self.active,
                 email_opted_in=self.email_opted_in,
                 email=self.email if include_private else None,
+                hub_token=self.hub_token if include_private else None,
                 teams=[t.to_model(_block_recursion=True) for t in self.teams],
                 full_name=self.full_name,
                 created=self.created,

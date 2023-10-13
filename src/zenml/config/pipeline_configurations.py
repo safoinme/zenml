@@ -12,19 +12,18 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Pipeline configuration classes."""
-import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-import yaml
 from pydantic import validator
 
 from zenml.config.constants import DOCKER_SETTINGS_KEY
-from zenml.config.schedule import Schedule
-from zenml.config.step_configurations import StepConfigurationUpdate, StepSpec
+from zenml.config.source import Source, convert_source_validator
 from zenml.config.strict_base_model import StrictBaseModel
+from zenml.models.model_base_model import ModelConfigModel
 
 if TYPE_CHECKING:
     from zenml.config import DockerSettings
+    from zenml.model.model_config import ModelConfig
 
 from zenml.config.base_settings import BaseSettings, SettingsOrDict
 
@@ -35,8 +34,34 @@ class PipelineConfigurationUpdate(StrictBaseModel):
     """Class for pipeline configuration updates."""
 
     enable_cache: Optional[bool] = None
+    enable_artifact_metadata: Optional[bool] = None
+    enable_artifact_visualization: Optional[bool] = None
+    enable_step_logs: Optional[bool] = None
     settings: Dict[str, BaseSettings] = {}
     extra: Dict[str, Any] = {}
+    failure_hook_source: Optional[Source] = None
+    success_hook_source: Optional[Source] = None
+    model_config_model: Optional[ModelConfigModel] = None
+
+    _convert_source = convert_source_validator(
+        "failure_hook_source", "success_hook_source"
+    )
+
+    @property
+    def model_config(self) -> Optional["ModelConfig"]:
+        """Gets a ModelConfig object out of the model config model.
+
+        This is a technical circular import resolver.
+
+        Returns:
+            The model config object, if configured.
+        """
+        if self.model_config_model is None:
+            return None
+
+        from zenml.model.model_config import ModelConfig
+
+        return ModelConfig.parse_obj(self.model_config_model.dict())
 
 
 class PipelineConfiguration(PipelineConfigurationUpdate):
@@ -77,46 +102,3 @@ class PipelineConfiguration(PipelineConfigurationUpdate):
             DOCKER_SETTINGS_KEY, {}
         )
         return DockerSettings.parse_obj(model_or_dict)
-
-
-class PipelineRunConfiguration(StrictBaseModel):
-    """Class for pipeline run configurations."""
-
-    run_name: Optional[str] = None
-    enable_cache: Optional[bool] = None
-    schedule: Optional[Schedule] = None
-    steps: Dict[str, StepConfigurationUpdate] = {}
-    settings: Dict[str, BaseSettings] = {}
-    extra: Dict[str, Any] = {}
-
-    def yaml(self, **kwargs: Any) -> str:
-        """Yaml representation of the run configuration.
-
-        Args:
-            **kwargs: Kwargs to pass to the pydantic json(...) method.
-
-        Returns:
-            Yaml string representation of the run configuration (with unsorted keys).
-        """
-        dict_ = json.loads(self.json(**kwargs, sort_keys=False))
-        return cast(str, yaml.dump(dict_, sort_keys=False))
-
-
-class PipelineSpec(StrictBaseModel):
-    """Specification of a pipeline."""
-
-    version: str = "0.1"
-    steps: List[StepSpec]
-
-    def __eq__(self, other: Any) -> bool:
-        """Returns whether the other object is referring to the same pipeline.
-
-        Args:
-            other: The other object to compare to.
-
-        Returns:
-            True if the other object is referring to the same pipeline.
-        """
-        if isinstance(other, PipelineSpec):
-            return self.steps == other.steps
-        return NotImplemented

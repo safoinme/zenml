@@ -12,71 +12,130 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Utility class to help with interacting with the dashboard."""
-from functools import partial
 from typing import Optional
-from uuid import UUID
 
+from zenml import constants
 from zenml.client import Client
-from zenml.enums import StoreType
+from zenml.enums import EnvironmentType, StoreType
+from zenml.environment import get_environment
 from zenml.logger import get_logger
+from zenml.models import (
+    ComponentResponseModel,
+    StackResponseModel,
+)
+from zenml.models.pipeline_run_models import PipelineRunResponseModel
 
 logger = get_logger(__name__)
 
 
-def get_run_url(
-    run_name: str, pipeline_id: Optional[UUID] = None
-) -> Optional[str]:
-    """Computes a dashboard url to directly view the run.
-
-    Args:
-        run_name: Name of the pipeline run.
-        pipeline_id: Optional pipeline_id, to be sent when available.
+def get_base_url() -> Optional[str]:
+    """Function to get the base workspace-scoped url.
 
     Returns:
-        A direct url link to the pipeline run details page. If run does not exist,
-        returns None.
-    """
-    # Connected to ZenML Server
-    client = Client()
-
-    if client.zen_store.type != StoreType.REST:
-        return ""
-
-    url = client.zen_store.url
-    runs = client.depaginate(partial(client.list_runs, name=run_name))
-
-    if pipeline_id:
-        url += f"/projects/{client.active_project.name}/pipelines/{str(pipeline_id)}/runs"
-    elif runs:
-        url += "/runs"
-    else:
-        url += "/pipelines/all-runs"
-
-    if runs:
-        url += f"/{runs[0].id}/dag"
-
-    return url
-
-
-def print_run_url(run_name: str, pipeline_id: Optional[UUID] = None) -> None:
-    """Logs a dashboard url to directly view the run.
-
-    Args:
-        run_name: Name of the pipeline run.
-        pipeline_id: Optional pipeline_id, to be sent when available.
+        the base url if the client is using a rest zen store, else None
     """
     client = Client()
 
     if client.zen_store.type == StoreType.REST:
-        url = get_run_url(
-            run_name,
-            pipeline_id,
+        url = (
+            client.zen_store.url
+            + f"{constants.WORKSPACES}/{client.active_workspace.name}"
         )
-        if url:
-            logger.info(f"Dashboard URL: {url}")
-    elif client.zen_store.type == StoreType.SQL:
-        # Connected to SQL Store Type, we're local
-        logger.info(
-            "Pipeline visualization can be seen in the ZenML Dashboard. "
-            "Run `zenml up` to see your pipeline!"
+        return url
+
+    return None
+
+
+def get_stack_url(stack: StackResponseModel) -> Optional[str]:
+    """Function to get the dashboard URL of a given stack model.
+
+    Args:
+        stack: the response model of the given stack.
+
+    Returns:
+        the URL to the stack if the dashboard is available, else None.
+    """
+    base_url = get_base_url()
+    if base_url:
+        return base_url + f"{constants.STACKS}/{stack.id}/configuration"
+    return None
+
+
+def get_component_url(component: ComponentResponseModel) -> Optional[str]:
+    """Function to get the dashboard URL of a given component model.
+
+    Args:
+        component: the response model of the given component.
+
+    Returns:
+        the URL to the component if the dashboard is available, else None.
+    """
+    base_url = get_base_url()
+    if base_url:
+        return (
+            base_url
+            + f"{constants.STACK_COMPONENTS}/{component.type.value}/{component.id}/configuration"
         )
+    return None
+
+
+def get_run_url(run: PipelineRunResponseModel) -> Optional[str]:
+    """Function to get the dashboard URL of a given pipeline run.
+
+    Args:
+        run: the response model of the given pipeline run.
+
+    Returns:
+        the URL to the pipeline run if the dashboard is available, else None.
+    """
+    base_url = get_base_url()
+    if base_url:
+        if run.pipeline:
+            return f"{base_url}{constants.PIPELINES}/{run.pipeline.id}{constants.RUNS}/{run.id}/dag"
+        else:
+            return f"{base_url}/all-runs/{run.id}/dag"
+    return None
+
+
+def show_dashboard(url: str) -> None:
+    """Show the ZenML dashboard at the given URL.
+
+    In native environments, the dashboard is opened in the default browser.
+    In notebook environments, the dashboard is embedded in an iframe.
+
+    Args:
+        url: URL of the ZenML dashboard.
+    """
+    environment = get_environment()
+    if environment in (EnvironmentType.NOTEBOOK, EnvironmentType.COLAB):
+        from IPython.core.display import display
+        from IPython.display import IFrame
+
+        display(IFrame(src=url, width="100%", height=720))
+
+    elif environment in (EnvironmentType.NATIVE, EnvironmentType.WSL):
+        if constants.handle_bool_env_var(
+            constants.ENV_AUTO_OPEN_DASHBOARD, default=True
+        ):
+            try:
+                import webbrowser
+
+                if environment == EnvironmentType.WSL:
+                    webbrowser.get("wslview %s").open(url)
+                else:
+                    webbrowser.open(url)
+                logger.info(
+                    "Automatically opening the dashboard in your "
+                    "browser. To disable this, set the env variable "
+                    "AUTO_OPEN_DASHBOARD=false."
+                )
+            except Exception as e:
+                logger.error(e)
+        else:
+            logger.info(
+                "To open the dashboard in a browser automatically, "
+                "set the env variable AUTO_OPEN_DASHBOARD=true."
+            )
+
+    else:
+        logger.info(f"The ZenML dashboard is available at {url}.")

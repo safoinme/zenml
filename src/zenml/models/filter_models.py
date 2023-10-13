@@ -12,7 +12,6 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """Base filter model definitions."""
-from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -25,6 +24,7 @@ from typing import (
     Optional,
     Tuple,
     Type,
+    TypeVar,
     Union,
 )
 from uuid import UUID
@@ -45,6 +45,11 @@ from zenml.logger import get_logger
 
 if TYPE_CHECKING:
     from sqlalchemy.sql.elements import BinaryExpression, BooleanClauseList
+    from sqlmodel.sql.expression import Select, SelectOfScalar
+
+    from zenml.zen_stores.schemas import BaseSchema
+
+    AnySchema = TypeVar("AnySchema", bound=BaseSchema)
 
 logger = get_logger(__name__)
 
@@ -78,6 +83,12 @@ class Filter(BaseModel, ABC):
 
         Args:
             op: The operation of this filter.
+
+        Returns:
+            The operation if it is valid.
+
+        Raises:
+            ValueError: If the operation is not valid for this field type.
         """
         if op not in cls.ALLOWED_OPS:
             raise ValueError(
@@ -161,9 +172,9 @@ class StrFilter(Filter):
         if self.operation == GenericFilterOps.CONTAINS:
             return column.like(f"%{self.value}%")
         if self.operation == GenericFilterOps.STARTSWITH:
-            return column.startswith(f"%{self.value}%")
+            return column.startswith(f"{self.value}")
         if self.operation == GenericFilterOps.ENDSWITH:
-            return column.endswith(f"%{self.value}%")
+            return column.endswith(f"{self.value}")
         return column == self.value
 
 
@@ -240,11 +251,11 @@ class BaseFilterModel(BaseModel):
     ```
     ResourceListModel(
         name="contains:default",
-        project="default"
+        workspace="default"
         count_steps="gte:5"
         sort_by="created",
         page=2,
-        size=50
+        size=20
     )
     ```
     """
@@ -260,26 +271,48 @@ class BaseFilterModel(BaseModel):
     # List of fields that are not even mentioned as options in the CLI.
     CLI_EXCLUDE_FIELDS: ClassVar[List[str]] = []
 
-    sort_by: str = Field("created", description="Which column to sort by.")
+    sort_by: str = Field(
+        default="created", description="Which column to sort by."
+    )
     logical_operator: LogicalOperators = Field(
-        LogicalOperators.AND,
+        default=LogicalOperators.AND,
         description="Which logical operator to use between all filters "
         "['and', 'or']",
     )
     page: int = Field(
-        PAGINATION_STARTING_PAGE, ge=1, description="Page number"
+        default=PAGINATION_STARTING_PAGE, ge=1, description="Page number"
     )
     size: int = Field(
-        PAGE_SIZE_DEFAULT, ge=1, le=PAGE_SIZE_MAXIMUM, description="Page size"
+        default=PAGE_SIZE_DEFAULT,
+        ge=1,
+        le=PAGE_SIZE_MAXIMUM,
+        description="Page size",
     )
 
-    id: Union[UUID, str] = Field(None, description="Id for this resource")
-    created: Union[datetime, str] = Field(None, description="Created")
-    updated: Union[datetime, str] = Field(None, description="Updated")
+    id: Optional[Union[UUID, str]] = Field(
+        default=None, description="Id for this resource"
+    )
+    created: Optional[Union[datetime, str]] = Field(
+        default=None, description="Created"
+    )
+    updated: Optional[Union[datetime, str]] = Field(
+        default=None, description="Updated"
+    )
 
     @validator("sort_by", pre=True)
     def validate_sort_by(cls, v: str) -> str:
-        """Validate that the sort_column is a valid column with a valid operand."""
+        """Validate that the sort_column is a valid column with a valid operand.
+
+        Args:
+            v: The sort_by field value.
+
+        Returns:
+            The validated sort_by field value.
+
+        Raises:
+            ValidationError: If the sort_by field is not a string.
+            ValueError: If the resource can't be sorted by this field.
+        """
         # Somehow pydantic allows you to pass in int values, which will be
         #  interpreted as string, however within the validator they are still
         #  integers, which don't have a .split() method
@@ -316,20 +349,35 @@ class BaseFilterModel(BaseModel):
 
     @root_validator(pre=True)
     def filter_ops(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse incoming filters to ensure all filters are legal."""
+        """Parse incoming filters to ensure all filters are legal.
+
+        Args:
+            values: The values of the class.
+
+        Returns:
+            The values of the class.
+        """
         cls._generate_filter_list(values)
         return values
 
     @property
     def list_of_filters(self) -> List[Filter]:
-        """Converts the class variables into a list of usable Filter Models."""
+        """Converts the class variables into a list of usable Filter Models.
+
+        Returns:
+            A list of Filter models.
+        """
         return self._generate_filter_list(
             {key: getattr(self, key) for key in self.__fields__}
         )
 
     @property
     def sorting_params(self) -> Tuple[str, SorterOps]:
-        """Converts the class variables into a list of usable Filter Models."""
+        """Converts the class variables into a list of usable Filter Models.
+
+        Returns:
+            A tuple of the column to sort by and the sorting operand.
+        """
         column = self.sort_by
         # The default sorting operand is asc
         operator = SorterOps.ASCENDING
@@ -355,7 +403,6 @@ class BaseFilterModel(BaseModel):
         list_of_filters: List[Filter] = []
 
         for key, value in values.items():
-
             # Ignore excluded filters
             if key in cls.FILTER_EXCLUDE_FIELDS:
                 continue
@@ -468,31 +515,93 @@ class BaseFilterModel(BaseModel):
 
     @classmethod
     def is_datetime_field(cls, k: str) -> bool:
-        """Checks if it's a datetime field."""
-        return issubclass(datetime, get_args(cls.__fields__[k].type_))
+        """Checks if it's a datetime field.
+
+        Args:
+            k: The key to check.
+
+        Returns:
+            True if the field is a datetime field, False otherwise.
+        """
+        return (
+            issubclass(datetime, get_args(cls.__fields__[k].type_))
+            or cls.__fields__[k].type_ is datetime
+        )
 
     @classmethod
     def is_uuid_field(cls, k: str) -> bool:
-        """Checks if it's a uuid field."""
-        return issubclass(UUID, get_args(cls.__fields__[k].type_))
+        """Checks if it's a uuid field.
+
+        Args:
+            k: The key to check.
+
+        Returns:
+            True if the field is a uuid field, False otherwise.
+        """
+        return (
+            issubclass(UUID, get_args(cls.__fields__[k].type_))
+            or cls.__fields__[k].type_ is UUID
+        )
 
     @classmethod
     def is_int_field(cls, k: str) -> bool:
-        """Checks if it's a int field."""
-        return issubclass(int, get_args(cls.__fields__[k].type_))
+        """Checks if it's a int field.
+
+        Args:
+            k: The key to check.
+
+        Returns:
+            True if the field is a int field, False otherwise.
+        """
+        return (
+            issubclass(int, get_args(cls.__fields__[k].type_))
+            or cls.__fields__[k].type_ is int
+        )
 
     @classmethod
     def is_bool_field(cls, k: str) -> bool:
-        """Checks if it's a bool field."""
-        return issubclass(bool, get_args(cls.__fields__[k].type_))
+        """Checks if it's a bool field.
+
+        Args:
+            k: The key to check.
+
+        Returns:
+            True if the field is a bool field, False otherwise.
+        """
+        return (
+            issubclass(bool, get_args(cls.__fields__[k].type_))
+            or cls.__fields__[k].type_ is bool
+        )
 
     @classmethod
     def is_str_field(cls, k: str) -> bool:
-        """Checks if it's a string field."""
+        """Checks if it's a string field.
+
+        Args:
+            k: The key to check.
+
+        Returns:
+            True if the field is a string field, False otherwise.
+        """
+        return (
+            issubclass(str, get_args(cls.__fields__[k].type_))
+            or cls.__fields__[k].type_ is str
+        )
+
+    @classmethod
+    def is_sort_by_field(cls, k: str) -> bool:
+        """Checks if it's a sort by field.
+
+        Args:
+            k: The key to check.
+
+        Returns:
+            True if the field is a sort by field, False otherwise.
+        """
         return (
             issubclass(str, get_args(cls.__fields__[k].type_))
             or cls.__fields__[k].type_ == str
-        )
+        ) and k == "sort_by"
 
     @staticmethod
     def _define_datetime_filter(
@@ -595,7 +704,11 @@ class BaseFilterModel(BaseModel):
 
     @property
     def offset(self) -> int:
-        """Returns the offset needed for the query on the data persistence layer."""
+        """Returns the offset needed for the query on the data persistence layer.
+
+        Returns:
+            The offset for the query.
+        """
         return self.size * (self.page - 1)
 
     def generate_filter(
@@ -608,6 +721,9 @@ class BaseFilterModel(BaseModel):
 
         Returns:
             The filter expression for the query.
+
+        Raises:
+            RuntimeError: If a valid logical operator is not supplied.
         """
         from sqlalchemy import and_
         from sqlmodel import or_
@@ -624,92 +740,178 @@ class BaseFilterModel(BaseModel):
         else:
             raise RuntimeError("No valid logical operator was supplied.")
 
+    def apply_filter(
+        self,
+        query: Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"],
+        table: Type["AnySchema"],
+    ) -> Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"]:
+        """Applies the filter to a query.
 
-class ProjectScopedFilterModel(BaseFilterModel):
-    """Model to enable advanced scoping with project."""
+        Args:
+            query: The query to which to apply the filter.
+            table: The query table.
+
+        Returns:
+            The query with filter applied.
+        """
+        filters = self.generate_filter(table=table)
+
+        if filters is not None:
+            query = query.where(filters)
+
+        return query
+
+
+class WorkspaceScopedFilterModel(BaseFilterModel):
+    """Model to enable advanced scoping with workspace."""
 
     FILTER_EXCLUDE_FIELDS: ClassVar[List[str]] = [
         *BaseFilterModel.FILTER_EXCLUDE_FIELDS,
-        "scope_project",
+        "scope_workspace",
     ]
     CLI_EXCLUDE_FIELDS: ClassVar[List[str]] = [
         *BaseFilterModel.CLI_EXCLUDE_FIELDS,
-        "scope_project",
+        "scope_workspace",
     ]
-    scope_project: Optional[UUID] = Field(
-        None,
-        description="The project to scope this query to.",
+    scope_workspace: Optional[UUID] = Field(
+        default=None,
+        description="The workspace to scope this query to.",
     )
 
-    def set_scope_project(self, project_id: UUID) -> None:
-        """Set the project to scope this response."""
-        self.scope_project = project_id
-
-    def generate_filter(
-        self, table: Type["SQLModel"]
-    ) -> Union["BinaryExpression[Any]", "BooleanClauseList[Any]"]:
-        """Generate the filter for the query.
-
-        Many resources are scoped by project, in which case only the resources
-        belonging to the active project should be returned.
+    def set_scope_workspace(self, workspace_id: UUID) -> None:
+        """Set the workspace to scope this response.
 
         Args:
-            table: The Table that is being queried from.
+            workspace_id: The workspace to scope this response to.
+        """
+        self.scope_workspace = workspace_id
+
+    def apply_filter(
+        self,
+        query: Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"],
+        table: Type["AnySchema"],
+    ) -> Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"]:
+        """Applies the filter to a query.
+
+        Args:
+            query: The query to which to apply the filter.
+            table: The query table.
 
         Returns:
-            The filter expression for the query.
+            The query with filter applied.
         """
-        from sqlalchemy import and_
+        from sqlmodel import or_
 
-        base_filter = super().generate_filter(table)
-        if self.scope_project:
-            project_filter = getattr(table, "project_id") == self.scope_project
-            return and_(base_filter, project_filter)
-        return base_filter
+        query = super().apply_filter(query=query, table=table)
+
+        if self.scope_workspace:
+            scope_filter = or_(
+                getattr(table, "workspace_id") == self.scope_workspace,
+                getattr(table, "workspace_id").is_(None),
+            )
+            query = query.where(scope_filter)
+
+        return query
 
 
-class ShareableProjectScopedFilterModel(ProjectScopedFilterModel):
-    """Model to enable advanced scoping with project and user scoped shareable things."""
+class ShareableWorkspaceScopedFilterModel(WorkspaceScopedFilterModel):
+    """Model to enable advanced scoping with workspace and user scoped shareable things."""
 
     FILTER_EXCLUDE_FIELDS: ClassVar[List[str]] = [
-        *ProjectScopedFilterModel.FILTER_EXCLUDE_FIELDS,
+        *WorkspaceScopedFilterModel.FILTER_EXCLUDE_FIELDS,
         "scope_user",
     ]
     CLI_EXCLUDE_FIELDS: ClassVar[List[str]] = [
-        *ProjectScopedFilterModel.CLI_EXCLUDE_FIELDS,
+        *WorkspaceScopedFilterModel.CLI_EXCLUDE_FIELDS,
         "scope_user",
     ]
     scope_user: Optional[UUID] = Field(
-        None,
+        default=None,
         description="The user to scope this query to.",
     )
 
     def set_scope_user(self, user_id: UUID) -> None:
-        """Set the user that is performing the filtering to scope the response."""
-        self.scope_user = user_id
-
-    def generate_filter(
-        self, table: Type["SQLModel"]
-    ) -> Union["BinaryExpression[Any]", "BooleanClauseList[Any]"]:
-        """Generate the filter for the query.
-
-        A user is only allowed to list the resources that either belong to them
-        or that are shared.
+        """Set the user that is performing the filtering to scope the response.
 
         Args:
-            table: The Table that is being queried from.
+            user_id: The user ID to scope the response to.
+        """
+        self.scope_user = user_id
+
+    def apply_filter(
+        self,
+        query: Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"],
+        table: Type["AnySchema"],
+    ) -> Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"]:
+        """Applies the filter to a query.
+
+        Args:
+            query: The query to which to apply the filter.
+            table: The query table.
 
         Returns:
-            The filter expression for the query.
+            The query with filter applied.
         """
-        from sqlalchemy import and_
         from sqlmodel import or_
 
-        base_filter = super().generate_filter(table)
+        query = super().apply_filter(query=query, table=table)
+
         if self.scope_user:
-            user_filter = or_(
+            scope_filter = or_(
                 getattr(table, "user_id") == self.scope_user,
                 getattr(table, "is_shared").is_(True),
             )
-            return and_(base_filter, user_filter)
-        return base_filter
+            query = query.where(scope_filter)
+
+        return query
+
+
+class UserScopedFilterModel(BaseFilterModel):
+    """Model to enable advanced user-based scoping."""
+
+    FILTER_EXCLUDE_FIELDS: ClassVar[List[str]] = [
+        *BaseFilterModel.FILTER_EXCLUDE_FIELDS,
+        "scope_user",
+    ]
+    CLI_EXCLUDE_FIELDS: ClassVar[List[str]] = [
+        *BaseFilterModel.CLI_EXCLUDE_FIELDS,
+        "scope_user",
+    ]
+    scope_user: Optional[UUID] = Field(
+        default=None,
+        description="The user to scope this query to.",
+    )
+
+    def set_scope_user(self, user_id: UUID) -> None:
+        """Set the user that is performing the filtering to scope the response.
+
+        Args:
+            user_id: The user ID to scope the response to.
+        """
+        self.scope_user = user_id
+
+    def apply_filter(
+        self,
+        query: Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"],
+        table: Type["AnySchema"],
+    ) -> Union["Select[AnySchema]", "SelectOfScalar[AnySchema]"]:
+        """Applies the filter to a query.
+
+        Args:
+            query: The query to which to apply the filter.
+            table: The query table.
+
+        Returns:
+            The query with filter applied.
+        """
+        from sqlmodel import or_
+
+        query = super().apply_filter(query=query, table=table)
+
+        if self.scope_user:
+            scope_filter = or_(
+                getattr(table, "user_id") == self.scope_user,
+            )
+            query = query.where(scope_filter)
+
+        return query

@@ -24,10 +24,19 @@ class ArtifactType(StrEnum):
     DATA_ANALYSIS = "DataAnalysisArtifact"
     DATA = "DataArtifact"
     MODEL = "ModelArtifact"
-    SCHEMA = "SchemaArtifact"
+    SCHEMA = "SchemaArtifact"  # deprecated
     SERVICE = "ServiceArtifact"
-    STATISTICS = "StatisticsArtifact"
+    STATISTICS = "StatisticsArtifact"  # deprecated in favor of `DATA_ANALYSIS`
     BASE = "BaseArtifact"
+
+
+class VisualizationType(StrEnum):
+    """All currently available visualization types."""
+
+    CSV = "csv"
+    HTML = "html"
+    IMAGE = "image"
+    MARKDOWN = "markdown"
 
 
 class ExecutionStatus(StrEnum):
@@ -65,6 +74,7 @@ class StackComponentType(StrEnum):
     ORCHESTRATOR = "orchestrator"
     SECRETS_MANAGER = "secrets_manager"
     STEP_OPERATOR = "step_operator"
+    MODEL_REGISTRY = "model_registry"
 
     @property
     def plural(self) -> str:
@@ -75,15 +85,41 @@ class StackComponentType(StrEnum):
         """
         if self == StackComponentType.CONTAINER_REGISTRY:
             return "container_registries"
+        elif self == StackComponentType.MODEL_REGISTRY:
+            return "model_registries"
 
         return f"{self.value}s"
 
 
+class SecretScope(StrEnum):
+    """Enum for the scope of a secret."""
+
+    WORKSPACE = "workspace"
+    USER = "user"
+
+
 class StoreType(StrEnum):
-    """Repository Store Backend Types."""
+    """Zen Store Backend Types."""
 
     SQL = "sql"
     REST = "rest"
+
+
+class SecretsStoreType(StrEnum):
+    """Secrets Store Backend Types.
+
+    NOTE: this is a superset of the StoreType values because the set of secrets
+    store backends includes all the backends supported for zen stores.
+    """
+
+    NONE = "none"  # indicates that the secrets store is disabled
+    SQL = StoreType.SQL.value
+    REST = StoreType.REST.value
+    AWS = "aws"
+    GCP = "gcp"
+    AZURE = "azure"
+    HASHICORP = "hashicorp"
+    CUSTOM = "custom"  # indicates that the secrets store uses a custom backend
 
 
 class ContainerRegistryFlavor(StrEnum):
@@ -105,8 +141,10 @@ class CliCategories(StrEnum):
 
     STACK_COMPONENTS = "Stack Components"
     MODEL_DEPLOYMENT = "Model Deployment"
+    HUB = "ZenML Hub"
     INTEGRATIONS = "Integrations"
     MANAGEMENT_TOOLS = "Management Tools"
+    MODEL_CONTROL_PLANE = "Model Control Plane"
     IDENTITY_AND_SECURITY = "Identity and Security"
     OTHER_COMMANDS = "Other Commands"
 
@@ -117,6 +155,7 @@ class AnnotationTasks(StrEnum):
     IMAGE_CLASSIFICATION = "image_classification"
     OBJECT_DETECTION_BOUNDING_BOXES = "object_detection_bounding_boxes"
     OCR = "optical_character_recognition"
+    TEXT_CLASSIFICATION = "text_classification"
 
 
 class SecretValidationLevel(StrEnum):
@@ -141,6 +180,7 @@ class AnalyticsEventSource(StrEnum):
     """Enum to identify analytics events source."""
 
     ZENML_GO = "zenml go"
+    ZENML_INIT = "zenml init"
     ZENML_SERVER = "zenml server"
 
 
@@ -153,6 +193,32 @@ class PermissionType(StrEnum):
     ME = (
         "me"  # allows the user to self administrate (change name, password...)
     )
+
+
+class AuthScheme(StrEnum):
+    """The authentication scheme."""
+
+    NO_AUTH = "NO_AUTH"
+    HTTP_BASIC = "HTTP_BASIC"
+    OAUTH2_PASSWORD_BEARER = "OAUTH2_PASSWORD_BEARER"
+    EXTERNAL = "EXTERNAL"
+
+
+class OAuthGrantTypes(StrEnum):
+    """The OAuth grant types."""
+
+    OAUTH_PASSWORD = "password"
+    OAUTH_DEVICE_CODE = "urn:ietf:params:oauth:grant-type:device_code"
+    ZENML_EXTERNAL = "zenml-external"
+
+
+class OAuthDeviceStatus(StrEnum):
+    """The OAuth device status."""
+
+    PENDING = "pending"
+    VERIFIED = "verified"
+    ACTIVE = "active"
+    LOCKED = "locked"
 
 
 class GenericFilterOps(StrEnum):
@@ -180,3 +246,48 @@ class LogicalOperators(StrEnum):
 
     OR = "or"
     AND = "and"
+
+
+class OperatingSystemType(StrEnum):
+    """Enum for OS types."""
+
+    LINUX = "Linux"
+    WINDOWS = "Windows"
+    MACOS = "Darwin"
+
+
+class SourceContextTypes(StrEnum):
+    """Enum for event source types."""
+
+    CLI = "cli"
+    PYTHON = "python"
+    DASHBOARD = "dashboard"
+    API = "api"
+    UNKNOWN = "unknown"
+
+
+class EnvironmentType(StrEnum):
+    """Enum for environment types."""
+
+    BITBUCKET_CI = "bitbucket_ci"
+    CIRCLE_CI = "circle_ci"
+    COLAB = "colab"
+    CONTAINER = "container"
+    DOCKER = "docker"
+    GENERIC_CI = "generic_ci"
+    GITHUB_ACTION = "github_action"
+    GITLAB_CI = "gitlab_ci"
+    KUBERNETES = "kubernetes"
+    NATIVE = "native"
+    NOTEBOOK = "notebook"
+    PAPERSPACE = "paperspace"
+    WSL = "wsl"
+
+
+class ModelStages(StrEnum):
+    """All possible stages of a Model Version."""
+
+    NONE = "none"
+    STAGING = "staging"
+    PRODUCTION = "production"
+    ARCHIVED = "archived"

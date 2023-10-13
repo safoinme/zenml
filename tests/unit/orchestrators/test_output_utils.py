@@ -16,6 +16,7 @@ import os
 
 import pytest
 
+from zenml.config.step_configurations import Step
 from zenml.orchestrators import output_utils
 
 
@@ -23,15 +24,20 @@ def test_output_artifact_preparation(create_step_run, local_stack):
     """Tests that the output artifact generation computes the correct artifact
     uris and creates the directories."""
     step_run = create_step_run(
-        outputs={"output_name": {"materializer_source": ""}}
+        step_run_name="step_run_name",
+        outputs={
+            "output_name": {"materializer_source": "module.materializer_class"}
+        },
     )
 
+    step = Step(spec=step_run.spec, config=step_run.config)
+
     output_artifact_uris = output_utils.prepare_output_artifact_uris(
-        step_run=step_run, stack=local_stack, step=step_run.step
+        step_run=step_run, stack=local_stack, step=step
     )
     expected_path = os.path.join(
         local_stack.artifact_store.path,
-        "step_name",
+        "step_run_name",
         "output_name",
         str(step_run.id),
     )
@@ -41,5 +47,5 @@ def test_output_artifact_preparation(create_step_run, local_stack):
     # artifact directory already exists
     with pytest.raises(RuntimeError):
         output_utils.prepare_output_artifact_uris(
-            step_run=step_run, stack=local_stack, step=step_run.step
+            step_run=step_run, stack=local_stack, step=step
         )

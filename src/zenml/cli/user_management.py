@@ -19,7 +19,7 @@ import click
 
 from zenml.cli import utils as cli_utils
 from zenml.cli.cli import TagGroup, cli
-from zenml.cli.utils import list_options
+from zenml.cli.utils import is_sorted_or_filtered, list_options
 from zenml.client import Client
 from zenml.console import console
 from zenml.enums import CliCategories, StoreType
@@ -40,7 +40,6 @@ def describe_user(user_name_or_id: Optional[str] = None) -> None:
     Args:
         user_name_or_id: The name or ID of the user.
     """
-    cli_utils.print_active_config()
     client = Client()
     if not user_name_or_id:
         active_user = client.active_user
@@ -74,9 +73,14 @@ def describe_user(user_name_or_id: Optional[str] = None) -> None:
 
 @user.command("list")
 @list_options(UserFilterModel)
-def list_users(**kwargs: Any) -> None:
-    """List all users."""
-    cli_utils.print_active_config()
+@click.pass_context
+def list_users(ctx: click.Context, **kwargs: Any) -> None:
+    """List all users.
+
+    Args:
+        ctx: The click context object
+        kwargs: Keyword arguments to filter the list of users.
+    """
     client = Client()
     with console.status("Listing stacks...\n"):
         users = client.list_users(**kwargs)
@@ -93,7 +97,8 @@ def list_users(**kwargs: Any) -> None:
                 "email_opted_in",
                 "activation_token",
             ],
-            is_active=lambda u: u.name == Client().active_user.name,
+            active_models=[Client().active_user],
+            show_active=not is_sorted_or_filtered(ctx),
         )
 
 
@@ -139,7 +144,6 @@ def create_user(
     client = Client()
     if not password:
         if client.zen_store.type != StoreType.REST:
-
             password = click.prompt(
                 f"Password for user {user_name}",
                 hide_input=True,
@@ -151,8 +155,6 @@ def create_user(
                 default="",
                 hide_input=True,
             )
-
-    cli_utils.print_active_config()
 
     try:
         new_user = client.create_user(
@@ -218,7 +220,7 @@ def update_user(
     """
     try:
         Client().update_user(
-            user_name_or_id=user_name_or_id,
+            name_id_or_prefix=user_name_or_id,
             updated_name=updated_name,
             updated_full_name=updated_full_name,
             updated_email=updated_email,
@@ -235,7 +237,6 @@ def delete_user(user_name_or_id: str) -> None:
     Args:
         user_name_or_id: The name or ID of the user to delete.
     """
-    cli_utils.print_active_config()
     try:
         Client().delete_user(user_name_or_id)
     except (KeyError, IllegalOperationError) as err:
@@ -251,12 +252,14 @@ def team() -> None:
 @team.command("list")
 @list_options(TeamFilterModel)
 def list_teams(**kwargs: Any) -> None:
-    """List all teams that fulfill the filter requirements."""
-    cli_utils.print_active_config()
+    """List all teams that fulfill the filter requirements.
+
+    Args:
+        kwargs: The filter options.
+    """
     client = Client()
 
     with console.status("Listing teams...\n"):
-
         teams = client.list_teams(**kwargs)
 
         if not teams:
@@ -277,7 +280,6 @@ def describe_team(team_name_or_id: str) -> None:
     Args:
         team_name_or_id: The name or ID of the team to describe.
     """
-    cli_utils.print_active_config()
     try:
         team_ = Client().get_team(name_id_or_prefix=team_name_or_id)
     except KeyError as err:
@@ -309,7 +311,6 @@ def create_team(team_name: str, users: Optional[List[str]] = None) -> None:
         team_name: Name of the team to create.
         users: Users to add to this team
     """
-    cli_utils.print_active_config()
     try:
         Client().create_team(name=team_name, users=users)
     except EntityExistsError as err:
@@ -352,10 +353,9 @@ def update_team(
         remove_users: Users to remove from the team
         add_users: Users to add to the team.
     """
-    cli_utils.print_active_config()
     try:
         team_ = Client().update_team(
-            team_name_or_id=team_name,
+            name_id_or_prefix=team_name,
             new_name=new_name,
             remove_users=remove_users,
             add_users=add_users,
@@ -374,7 +374,6 @@ def delete_team(team_name_or_id: str) -> None:
     Args:
         team_name_or_id: The name or ID of the team to delete.
     """
-    cli_utils.print_active_config()
     try:
         Client().delete_team(team_name_or_id)
     except KeyError as err:

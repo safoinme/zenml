@@ -16,7 +16,7 @@ import pytest
 
 from tests.integration.examples.utils import run_example
 from zenml.client import Client
-from zenml.post_execution.pipeline import get_pipeline
+from zenml.constants import METADATA_EXPERIMENT_TRACKER_URL
 
 
 def test_example(request: pytest.FixtureRequest) -> None:
@@ -30,17 +30,19 @@ def test_example(request: pytest.FixtureRequest) -> None:
 
     with run_example(
         request=request,
-        name="mlflow_tracking",
-        pipeline_name="mlflow_example_pipeline",
-        run_count=2,
-    ) as (example, runs):
-        pipeline = get_pipeline("mlflow_example_pipeline")
+        name="mlflow",
+        example_args=["--type", "tracking"],
+        pipelines={"mlflow_tracking_pipeline": (1, 4)},
+        timeout_limit=750,
+    ) as runs:
+        client = Client()
+        pipeline = client.get_pipeline("mlflow_tracking_pipeline")
         assert pipeline
 
-        first_run, second_run = runs
+        run = runs["mlflow_tracking_pipeline"][0]
 
         # activate the stack set up and used by the example
-        client = Client()
+
         experiment_tracker = client.active_stack.experiment_tracker
         assert isinstance(experiment_tracker, MLFlowExperimentTracker)
         experiment_tracker.configure_mlflow()
@@ -49,36 +51,23 @@ def test_example(request: pytest.FixtureRequest) -> None:
         mlflow_experiment = mlflow.get_experiment_by_name(pipeline.name)
         assert mlflow_experiment is not None
 
-        # fetch all MLflow runs created for the pipeline
-        mlflow_runs = mlflow.search_runs(
-            experiment_ids=[mlflow_experiment.experiment_id],
-            output_format="list",
-        )
-        assert len(mlflow_runs) >= 2
-
         # fetch the MLflow run created for the first pipeline run
         mlflow_runs = mlflow.search_runs(
             experiment_ids=[mlflow_experiment.experiment_id],
-            filter_string=f'tags.mlflow.runName = "{first_run.name}"',
+            filter_string=f'tags.mlflow.runName = "{run.name}"',
             output_format="list",
         )
         assert len(mlflow_runs) == 1
         first_mlflow_run = mlflow_runs[0]
-
-        # fetch the MLflow run created for the second pipeline run
-        mlflow_runs = mlflow.search_runs(
-            experiment_ids=[mlflow_experiment.experiment_id],
-            filter_string=f'tags.mlflow.runName = "{second_run.name}"',
-            output_format="list",
-        )
-        assert len(mlflow_runs) == 1
-        second_mlflow_run = mlflow_runs[0]
 
         client = MlflowClient()
         # fetch the MLflow artifacts logged during the first pipeline run
         artifacts = client.list_artifacts(first_mlflow_run.info.run_id)
         assert len(artifacts) == 3
 
-        # fetch the MLflow artifacts logged during the second pipeline run
-        artifacts = client.list_artifacts(second_mlflow_run.info.run_id)
-        assert len(artifacts) == 3
+        # ensure that tracking_url is set in the step metadata
+        trainer_step = run.steps["trainer"]
+        tracking_url = trainer_step.metadata.get(
+            METADATA_EXPERIMENT_TRACKER_URL
+        )
+        assert tracking_url is not None

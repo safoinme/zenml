@@ -13,15 +13,19 @@ you finalize your pull requests.
 
 ## ⚡️ Quicklinks
 
-* [Code of Conduct](#%EF%B8%8F-code-of-conduct)
-* [Getting Started](#-getting-started)
-    * [Issues](#%EF%B8%8F-issues)
-    * [Pull Requests](#-pull-requests-when-to-make-one)
-    * [Linting, formatting, and tests](#-linting-formatting-and-tests)
-    * [Reporting a vulnerability](#-reporting-a-vulnerability)
-* [Coding conventions](#coding-conventions)
-* [Creating a new integration](#-creating-a-new-integration)
-* [Getting Help](#-getting-help)
+- [🧑‍💻 Contributing to ZenML](#-contributing-to-zenml)
+  - [⚡️ Quicklinks](#-quicklinks)
+  - [🧑‍⚖️ Code of Conduct](#-code-of-conduct)
+  - [🛫 Getting Started](#-getting-started)
+    - [⁉️ Issues](#-issues)
+    - [🏷 Pull Requests: When to make one](#-pull-requests-when-to-make-one)
+    - [💯 Pull Requests: Workflow to Contribute](#-pull-requests-workflow-to-contribute)
+    - [🧱 Pull Requests: Rebase on develop](#-pull-requests-rebase-your-branch-on-develop)
+    - [🧐 Linting, formatting, and tests](#-linting-formatting-and-tests)
+    - [🚨 Reporting a Vulnerability](#-reporting-a-vulnerability)
+  - [Coding Conventions](#coding-conventions)
+  - [👷 Creating a new Integration](#-creating-a-new-integration)
+  - [🆘 Getting Help](#-getting-help)
 
 ## 🧑‍⚖️ Code of Conduct
 
@@ -115,48 +119,74 @@ the ["fork-and-pull" Git workflow](https://github.com/susam/gitpr)
 9. Open a PR in our repository (to the `develop` branch, **NOT** `main`) and
    follow the PR template so that we can efficiently review the changes.
 
+### 🧱 Pull Requests: Rebase Your Branch on Develop
+
+1. When making pull requests to ZenML, you should always make your changes on a branch that is based on `develop`. You can create a new branch based on `develop` by running the following command:
+   ```
+   git checkout -b <new-branch-name> develop
+   ```
+2. Fetch the latest changes from the remote `develop` branch:
+   ```
+   git fetch origin develop
+   ```
+3. Switch to your branch:
+   ```
+   git checkout <your-branch-name>
+   ```
+4. Rebase your branch on `develop`:
+   ```
+   git rebase origin/develop
+   ```
+   This will apply your branch's changes on top of the latest changes in `develop`, one commit at a time.
+5. Resolve any conflicts that may arise during the rebase. Git will notify you if there are any conflicts that need to be resolved. Use a text editor to manually resolve the conflicts in the affected files.
+6. After resolving the conflicts, stage the changes:
+   ```
+   git add .
+   ```
+7. Continue the rebase for all of your commits and go to 5) if there are conflicts.
+   ```
+   git rebase --continue
+   ```
+8. Push the rebased branch to your remote repository:
+   ```
+   git push origin --force <your-branch-name>
+   ```
+9. Open a pull request targeting the `develop` branch. The changes from your rebased branch will now be based on the latest `develop` branch.
+
 ### 🧐 Linting, formatting, and tests
 
-ZenML is mainly developed using [Poetry](https://python-poetry.org/) as the
-dependency management system. In order to
-install all core dev-dependencies, do:
+To install ZenML from your local checked out files including all core dev-dependencies, run:
 
 ```
-poetry install
+pip install -e ".[server,dev]"
 ```
 
 Optionally, you might want to run the following commands to ensure you have all
 integrations for `mypy` checks:
 
 ```
-poetry run zenml integration install -f
-poetry run zenml integration install -y -i feast
+zenml integration install -y -i feast
 pip install click~=8.0.3
 mypy --install-types
 ```
 
-Warning: This might take a while for both (~ 15 mins each, depending on your machine), however if you have
+Warning: This might take a while for both (~ 15 minutes each, depending on your machine), however if you have
 time, please run it as it will make the
 next commands error-free.
 
-You can now run the following scripts via Poetry to automatically format your
+You can now run the following scripts to automatically format your
 code and to check whether the code formatting, linting, docstrings, and
 spelling is in order:
 
 ```
-poetry run bash scripts/format.sh
-poetry run bash scripts/run-ci-checks.sh
+bash scripts/format.sh
+bash scripts/run-ci-checks.sh
 ```
-
-If the spell checker catches errors, you will have to add the words to
-`.pyspelling-ignore-words`. (Note that if you wish to run the spellchecks
-manually on your local machine, first install `aspell` (using `brew` or
-`apt-get` or whatever package manager you are using on Windows).)
 
 Tests can be run as follows:
 
 ```
-poetry run bash scripts/test-coverage-xml.sh
+bash scripts/test-coverage-xml.sh
 ```
 
 Please note that it is good practice to run the above commands before submitting
@@ -165,19 +195,8 @@ will run it anyway, so you might as well catch the errors locally!
 
 ### 🚨 Reporting a Vulnerability
 
-If you think you have found a vulnerability, and even if you are not sure about it,
-please report it right away by sending an
-email to: support@zenml.com. Please try to be as explicit as possible,
-describing all the steps and example code to
-reproduce the security issue.
-
-We will review it thoroughly and get back to you.
-
-Please refrain from publicly discussing a potential security vulnerability as
-this could potentially put our users at
-risk! It's better to discuss privately and give us a chance to find a solution
-first, to limit the potential impact
-as much as possible.
+Please refer to [our security / reporting instructions](./SECURITY.md) for
+details on reporting vulnerabilities.
 
 
 ## Coding Conventions
@@ -201,7 +220,6 @@ the most relevant places for contributors are highlighted with a `<-` arrow:
 │   ├── io                  -- File operation implementations
 │   ├── materializers       <- Materializers responsible for reading/writing artifacts
 │   ├── pipelines           <- The base pipeline and its decorator
-│   ├── post_execution      <- Code for accessing past pipeline runs
 │   ├── services            -- Code responsible for managing services
 │   ├── stack               <- Stack, Stack Components and the flavor registry
 │   ├── steps               <- Steps and their decorators are defined here
@@ -223,8 +241,8 @@ for detailed step-by-step instructions.
 [Examples README](examples/README.md) 
 to find out what to do.
 3. All integrations deserve to be documented. Make sure to pay a visit to the
-[Integrations Page](https://docs.zenml.io/component-gallery/integrations)
-in the docs and add the integration. 
+[Component Guide](https://docs.zenml.io/stacks-and-components/component-guide)
+in the docs and add your implementations. 
 
 ## 🆘 Getting Help
 

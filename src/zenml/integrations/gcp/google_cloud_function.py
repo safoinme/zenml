@@ -25,6 +25,7 @@ from google.cloud.functions_v2.types import (
     CreateFunctionRequest,
     Function,
     GetFunctionRequest,
+    ServiceConfig,
     Source,
     StorageSource,
 )
@@ -106,6 +107,7 @@ def create_cloud_function(
     location: str,
     function_name: str,
     credentials: Optional["Credentials"] = None,
+    function_service_account_email: Optional[str] = None,
     timeout: int = 1800,
 ) -> str:
     """Create google cloud function from specified directory path.
@@ -117,6 +119,7 @@ def create_cloud_function(
         location: GCP location name.
         function_name: Name of the function to create.
         credentials: Credentials to use for GCP services.
+        function_service_account_email: The service account email the function will run with.
         timeout: Timeout in seconds.
 
     Returns:
@@ -124,6 +127,7 @@ def create_cloud_function(
 
     Raises:
         TimeoutError: If function times out.
+        RuntimeError: If scheduling runs into a problem.
     """
     sanitized_function_name = function_name.replace("_", "-")
     parent = f"projects/{project}/locations/{location}"
@@ -144,14 +148,19 @@ def create_cloud_function(
                     runtime="python38",
                     source=Source(storage_source=storage_source),
                 ),
+                service_config=ServiceConfig(
+                    service_account_email=function_service_account_email
+                )
+                if function_service_account_email
+                else None,
             ),
         )
     )
 
     state = Function.State.DEPLOYING
     logger.info(
-        "Creating function... This might take a few minutes. "
-        "Please do not exit the program at this point..."
+        "Creating cloud function to run pipeline... This might take a few "
+        "minutes. Please do not exit the program at this point..."
     )
 
     start_time = time.time()
@@ -165,6 +174,14 @@ def create_cloud_function(
 
         if time.time() - start_time > timeout:
             raise TimeoutError("Timed out waiting for function to deploy!")
+
+    if state != Function.State.ACTIVE:
+        error_messages = ", ".join(
+            [msg.message for msg in response.state_messages]
+        )
+        raise RuntimeError(
+            f"Scheduling failed with the following messages: {error_messages}"
+        )
 
     logger.info(f"Done! Function available at {response.service_config.uri}")
     return str(response.service_config.uri)

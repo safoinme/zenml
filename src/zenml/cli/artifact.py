@@ -24,6 +24,7 @@ from zenml.client import Client
 from zenml.enums import CliCategories
 from zenml.logger import get_logger
 from zenml.models.artifact_models import ArtifactFilterModel
+from zenml.utils.pagination_utils import depaginate
 
 logger = get_logger(__name__)
 
@@ -36,12 +37,15 @@ def artifact() -> None:
 @cli_utils.list_options(ArtifactFilterModel)
 @artifact.command("list", help="List all artifacts.")
 def list_artifacts(**kwargs: Any) -> None:
-    """List all artifacts."""
-    cli_utils.print_active_config()
+    """List all artifacts.
+
+    Args:
+        **kwargs: Keyword arguments to filter artifacts.
+    """
     artifacts = Client().list_artifacts(**kwargs)
 
     if not artifacts:
-        logger.info("No artifacts found.")
+        cli_utils.declare("No artifacts found.")
         return
 
     cli_utils.print_pydantic_models(
@@ -50,8 +54,10 @@ def list_artifacts(**kwargs: Any) -> None:
             "created",
             "updated",
             "user",
-            "project",
+            "workspace",
             "producer_step_run_id",
+            "metadata",
+            "artifact_store_id",
         ],
     )
 
@@ -90,8 +96,6 @@ def delete_artifact(
         only_metadata: If set, only delete metadata and not the actual artifact.
         yes: If set, don't ask for confirmation.
     """
-    cli_utils.print_active_config()
-
     if not yes:
         confirmation = cli_utils.confirmation(
             f"Are you sure you want to delete artifact '{artifact_id}'?"
@@ -141,10 +145,8 @@ def prune_artifacts(
         only_metadata: If set, only delete metadata and not the actual artifact.
         yes: If set, don't ask for confirmation.
     """
-    cli_utils.print_active_config()
-
     client = Client()
-    unused_artifacts = client.depaginate(
+    unused_artifacts = depaginate(
         partial(client.list_artifacts, only_unused=True)
     )
 

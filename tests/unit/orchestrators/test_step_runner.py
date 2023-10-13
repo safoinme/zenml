@@ -12,15 +12,16 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 
-import sys
 from uuid import uuid4
 
 import pytest
 
+from zenml.artifacts.unmaterialized_artifact import UnmaterializedArtifact
 from zenml.config.pipeline_configurations import PipelineConfiguration
 from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
-from zenml.materializers import UnmaterializedArtifact
+from zenml.models.pipeline_run_models import PipelineRunResponseModel
+from zenml.models.step_run_models import StepRunResponseModel
 from zenml.orchestrators.step_launcher import StepRunner
 from zenml.stack import Stack
 from zenml.steps import step
@@ -36,24 +37,23 @@ def failing_step() -> None:
     raise RuntimeError()
 
 
-def test_running_a_successful_step(mocker, local_stack):
+def test_running_a_successful_step(
+    mocker,
+    local_stack,
+    sample_pipeline_run: PipelineRunResponseModel,
+    sample_step_run: StepRunResponseModel,
+):
     """Tests that running a successful step runs the step entrypoint
     and correctly prepares/cleans up."""
     mock_prepare_step_run = mocker.patch.object(Stack, "prepare_step_run")
     mock_cleanup_step_run = mocker.patch.object(Stack, "cleanup_step_run")
-    mock_publish_output_artifacts = mocker.patch(
-        "zenml.orchestrators.step_runner.publish_output_artifacts",
-        return_value={},
+    mocker.patch(
+        "zenml.utils.artifact_utils.upload_artifact",
+        return_value=uuid4(),
     )
     mock_publish_successful_step_run = mocker.patch(
         "zenml.orchestrators.step_runner.publish_successful_step_run"
     )
-    if sys.version_info >= (3, 8):
-        # Mocking the entrypoint function adds a `_mock_self` arg to the mock
-        # signature on python 3.7.x which messes with the input resolution
-        mock_entrypoint = mocker.patch.object(
-            successful_step, "entrypoint", autospec=True, return_value=None
-        )
 
     step = Step.parse_obj(
         {
@@ -71,35 +71,40 @@ def test_running_a_successful_step(mocker, local_stack):
         step_run_id=uuid4(),
         run_id=uuid4(),
         run_name="run_name",
+        pipeline_step_name="step_name",
         config=step.config,
         pipeline=pipeline_config,
     )
 
     runner = StepRunner(step=step, stack=local_stack)
     runner.run(
+        pipeline_run=sample_pipeline_run,
+        step_run=sample_step_run,
+        step_run_info=step_run_info,
         input_artifacts={},
         output_artifact_uris={},
-        step_run_info=step_run_info,
     )
     mock_prepare_step_run.assert_called_with(info=step_run_info)
     mock_cleanup_step_run.assert_called_with(
         info=step_run_info, step_failed=False
     )
-    mock_publish_output_artifacts.assert_called_once()
     mock_publish_successful_step_run.assert_called_once()
-    if sys.version_info >= (3, 8):
-        mock_entrypoint.assert_called_once()
 
 
-def test_running_a_failing_step(mocker, local_stack):
+def test_running_a_failing_step(
+    mocker,
+    local_stack,
+    sample_pipeline_run: PipelineRunResponseModel,
+    sample_step_run: StepRunResponseModel,
+):
     """Tests that running a failing step runs the step entrypoint
     and correctly prepares/cleans up."""
 
     mock_prepare_step_run = mocker.patch.object(Stack, "prepare_step_run")
     mock_cleanup_step_run = mocker.patch.object(Stack, "cleanup_step_run")
-    mock_publish_output_artifacts = mocker.patch(
-        "zenml.orchestrators.step_runner.publish_output_artifacts",
-        return_value={},
+    mocker.patch(
+        "zenml.utils.artifact_utils.upload_artifact",
+        return_value=uuid4(),
     )
     mock_publish_successful_step_run = mocker.patch(
         "zenml.orchestrators.step_runner.publish_successful_step_run"
@@ -121,6 +126,7 @@ def test_running_a_failing_step(mocker, local_stack):
         step_run_id=uuid4(),
         run_id=uuid4(),
         run_name="run_name",
+        pipeline_step_name="step_name",
         config=step.config,
         pipeline=pipeline_config,
     )
@@ -128,16 +134,17 @@ def test_running_a_failing_step(mocker, local_stack):
     runner = StepRunner(step=step, stack=local_stack)
     with pytest.raises(RuntimeError):
         runner.run(
+            pipeline_run=sample_pipeline_run,
+            step_run=sample_step_run,
+            step_run_info=step_run_info,
             input_artifacts={},
             output_artifact_uris={},
-            step_run_info=step_run_info,
         )
 
     mock_prepare_step_run.assert_called_with(info=step_run_info)
     mock_cleanup_step_run.assert_called_with(
         info=step_run_info, step_failed=True
     )
-    mock_publish_output_artifacts.assert_not_called()
     mock_publish_successful_step_run.assert_not_called()
 
 
@@ -149,7 +156,7 @@ def test_loading_unmaterialized_input_artifact(
     step = Step.parse_obj(
         {
             "spec": {
-                "source": "",
+                "source": "module.step_class",
                 "upstream_steps": [],
             },
             "config": {

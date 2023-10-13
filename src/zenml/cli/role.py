@@ -35,11 +35,13 @@ def role() -> None:
 @role.command("list")
 @list_options(RoleFilterModel)
 def list_roles(**kwargs: Any) -> None:
-    """List all roles that fulfill the filter requirements."""
-    cli_utils.print_active_config()
+    """List all roles that fulfill the filter requirements.
+
+    Args:
+        **kwargs: Keyword arguments to filter the list of roles.
+    """
     client = Client()
     with console.status("Listing roles...\n"):
-
         roles = client.list_roles(**kwargs)
         if not roles.items:
             cli_utils.declare("No roles found for the given filters.")
@@ -68,8 +70,6 @@ def create_role(role_name: str, permissions: List[str]) -> None:
         role_name: Name of the role to create.
         permissions: Permissions to assign
     """
-    cli_utils.print_active_config()
-
     try:
         Client().create_role(name=role_name, permissions_list=permissions)
         cli_utils.declare(f"Created role '{role_name}'.")
@@ -110,8 +110,6 @@ def update_role(
         remove_permission: Name of permission to remove from role
         add_permission: Name of permission to add to role
     """
-    cli_utils.print_active_config()
-
     try:
         Client().update_role(
             name_id_or_prefix=role_name,
@@ -137,7 +135,6 @@ def delete_role(role_name_or_id: str) -> None:
     Args:
         role_name_or_id: Name or ID of the role to delete.
     """
-    cli_utils.print_active_config()
     try:
         Client().delete_role(name_id_or_prefix=role_name_or_id)
     except (KeyError, IllegalOperationError) as err:
@@ -147,7 +144,7 @@ def delete_role(role_name_or_id: str) -> None:
 
 @role.command("assign", help="Assign a role.")
 @click.argument("role_name_or_id", type=str, required=True)
-@click.option("--project", "project_name_or_id", type=str, required=False)
+@click.option("--workspace", "workspace_name_or_id", type=str, required=False)
 @click.option(
     "--user", "user_names_or_ids", type=str, required=False, multiple=True
 )
@@ -158,7 +155,7 @@ def assign_role(
     role_name_or_id: str,
     user_names_or_ids: Tuple[str],
     team_names_or_ids: Tuple[str],
-    project_name_or_id: Optional[str] = None,
+    workspace_name_or_id: Optional[str] = None,
 ) -> None:
     """Assign a role.
 
@@ -166,18 +163,16 @@ def assign_role(
         role_name_or_id: Name or IDs of the role to assign.
         user_names_or_ids : Names or IDs of users to assign the role to.
         team_names_or_ids: Names or IDs of teams to assign the role to.
-        project_name_or_id: Name or IDs of a project in which to assign the
+        workspace_name_or_id: Name or IDs of a workspace in which to assign the
             role. If this is not provided, the role will be assigned globally.
     """
-    cli_utils.print_active_config()
-
     # Assign the role to users
     for user_name_or_id in user_names_or_ids:
         try:
             Client().create_user_role_assignment(
                 role_name_or_id=role_name_or_id,
                 user_name_or_id=user_name_or_id,
-                project_name_or_id=project_name_or_id,
+                workspace_name_or_id=workspace_name_or_id,
             )
         except KeyError as err:
             cli_utils.error(str(err))
@@ -194,7 +189,7 @@ def assign_role(
             Client().create_team_role_assignment(
                 role_name_or_id=role_name_or_id,
                 team_name_or_id=team_name_or_id,
-                project_name_or_id=project_name_or_id,
+                workspace_name_or_id=workspace_name_or_id,
             )
         except KeyError as err:
             cli_utils.error(str(err))
@@ -208,7 +203,7 @@ def assign_role(
 
 @role.command("revoke", help="Revoke a role.")
 @click.argument("role_name_or_id", type=str, required=True)
-@click.option("--project", "project_name_or_id", type=str, required=False)
+@click.option("--workspace", "workspace_name_or_id", type=str, required=False)
 @click.option(
     "--user", "user_names_or_ids", type=str, required=False, multiple=True
 )
@@ -219,7 +214,7 @@ def revoke_role(
     role_name_or_id: str,
     user_names_or_ids: Tuple[str],
     team_names_or_ids: Tuple[str],
-    project_name_or_id: Optional[str] = None,
+    workspace_name_or_id: Optional[str] = None,
 ) -> None:
     """Revoke a role.
 
@@ -227,17 +222,16 @@ def revoke_role(
         role_name_or_id: Name or IDs of the role to revoke.
         user_names_or_ids: Names or IDs of users from which to revoke the role.
         team_names_or_ids: Names or IDs of teams from which to revoke the role.
-        project_name_or_id: Name or IDs of a project in which to revoke the
+        workspace_name_or_id: Name or IDs of a workspace in which to revoke the
             role. If this is not provided, the role will be revoked globally.
     """
-    cli_utils.print_active_config()
     client = Client()
 
     role = client.get_role(name_id_or_prefix=role_name_or_id)
-    project_id = None
-    if project_name_or_id:
-        project_id = client.get_project(
-            name_id_or_prefix=project_name_or_id
+    workspace_id = None
+    if workspace_name_or_id:
+        workspace_id = client.get_workspace(
+            name_id_or_prefix=workspace_name_or_id
         ).id
 
     # Revoke the role from users
@@ -247,7 +241,7 @@ def revoke_role(
             user_role_assignments = client.list_user_role_assignment(
                 role_id=role.id,
                 user_id=user.id,
-                project_id=project_id,
+                workspace_id=workspace_id,
             )
             for user_role_assignment in user_role_assignments.items:
                 Client().delete_user_role_assignment(user_role_assignment.id)
@@ -266,7 +260,7 @@ def revoke_role(
             team_role_assignments = client.list_team_role_assignment(
                 role_id=role.id,
                 team_id=team.id,
-                project_id=project_id,
+                workspace_id=workspace_id,
             )
             for team_role_assignment in team_role_assignments.items:
                 Client().delete_user_role_assignment(team_role_assignment.id)
@@ -287,11 +281,13 @@ def assignment() -> None:
 @assignment.command("list")
 @list_options(UserRoleAssignmentFilterModel)
 def list_role_assignments(**kwargs: Any) -> None:
-    """List all user role assignments that fulfill the filter requirements."""
-    cli_utils.print_active_config()
+    """List all user role assignments that fulfill the filter requirements.
+
+    Args:
+        kwargs: Keyword arguments.
+    """
     client = Client()
     with console.status("Listing roles...\n"):
-
         role_assignments = client.list_user_role_assignment(**kwargs)
         if not role_assignments.items:
             cli_utils.declare(
@@ -311,7 +307,6 @@ def permission() -> None:
 @permission.command("list")
 def list_permissions() -> None:
     """List all role assignments."""
-    cli_utils.print_active_config()
     permissions = [i.value for i in PermissionType]
     cli_utils.declare(
         f"The following permissions are currently supported: " f"{permissions}"

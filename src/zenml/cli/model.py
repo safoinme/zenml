@@ -1,4 +1,4 @@
-#  Copyright (c) ZenML GmbH 2021. All Rights Reserved.
+#  Copyright (c) ZenML GmbH 2023. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -11,424 +11,627 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
-"""Functionality for model-deployer CLI subcommands."""
-
-import uuid
-from typing import TYPE_CHECKING, Optional, cast
+"""CLI functionality to interact with Model Control Plane."""
+# from functools import partial
+from typing import Any, List, Optional
 
 import click
-from rich.errors import MarkupError
 
+# from uuid import UUID
+# import click
+from zenml.cli import utils as cli_utils
 from zenml.cli.cli import TagGroup, cli
-from zenml.cli.utils import (
-    declare,
-    error,
-    pretty_print_model_deployer,
-    print_served_model_configuration,
-    warning,
+from zenml.client import Client
+from zenml.enums import CliCategories, ModelStages
+from zenml.logger import get_logger
+from zenml.models.model_models import (
+    ModelFilterModel,
+    ModelRequestModel,
+    ModelUpdateModel,
+    ModelVersionArtifactFilterModel,
+    ModelVersionFilterModel,
+    ModelVersionPipelineRunFilterModel,
+    ModelVersionUpdateModel,
 )
-from zenml.console import console
-from zenml.enums import StackComponentType
 
-if TYPE_CHECKING:
-    from zenml.model_deployers import BaseModelDeployer
+# from zenml.utils.pagination_utils import depaginate
+
+logger = get_logger(__name__)
 
 
-def register_model_deployer_subcommands() -> None:  # noqa: C901
-    """Registers CLI subcommands for the Model Deployer."""
-    model_deployer_group = cast(TagGroup, cli.commands.get("model-deployer"))
-    if not model_deployer_group:
+@cli.group(cls=TagGroup, tag=CliCategories.MODEL_CONTROL_PLANE)
+def model() -> None:
+    """Interact with models and model versions in the Model Control Plane."""
+
+
+@cli_utils.list_options(ModelFilterModel)
+@model.command("list", help="List models with filter.")
+def list_models(**kwargs: Any) -> None:
+    """List models with filter in the Model Control Plane.
+
+    Args:
+        **kwargs: Keyword arguments to filter models.
+    """
+    models = Client().list_models(ModelFilterModel(**kwargs))
+
+    if not models:
+        cli_utils.declare("No models found.")
         return
 
-    @model_deployer_group.group(
-        cls=TagGroup,
-        help="Commands for interacting with annotation datasets.",
+    cli_utils.print_pydantic_models(
+        models,
+        exclude_columns=["user", "workspace"],
     )
-    @click.pass_context
-    def models(ctx: click.Context) -> None:
-        """List and manage served models with the active model deployer.
 
-        Args:
-            ctx: The click context.
-        """
-        from zenml.client import Client
-        from zenml.stack.stack_component import StackComponent
 
-        client = Client()
-        model_deployer_models = client.active_stack_model.components.get(
-            StackComponentType.MODEL_DEPLOYER
+@model.command("register", help="Register a new model.")
+@click.option(
+    "--name",
+    "-n",
+    help="The name of the model.",
+    type=str,
+    required=True,
+)
+@click.option(
+    "--license",
+    "-l",
+    help="The license under which the model is created.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--description",
+    "-d",
+    help="The description of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--audience",
+    "-a",
+    help="The target audience for the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--use-cases",
+    "-u",
+    help="The use cases of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--tradeoffs",
+    help="The tradeoffs of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--ethical",
+    "-e",
+    help="The ethical implications of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--limitations",
+    help="The known limitations of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--tag",
+    "-t",
+    help="Tags associated with the model.",
+    type=str,
+    required=False,
+    multiple=True,
+)
+def register_model(
+    name: str,
+    license: Optional[str],
+    description: Optional[str],
+    audience: Optional[str],
+    use_cases: Optional[str],
+    tradeoffs: Optional[str],
+    ethical: Optional[str],
+    limitations: Optional[str],
+    tag: Optional[List[str]],
+) -> None:
+    """Register a new model in the Model Control Plane.
+
+    Args:
+        name: The name of the model.
+        license: The license model created under.
+        description: The description of the model.
+        audience: The target audience of the model.
+        use_cases: The use cases of the model.
+        tradeoffs: The tradeoffs of the model.
+        ethical: The ethical implications of the model.
+        limitations: The know limitations of the model.
+        tag: Tags associated with the model.
+    """
+    model = Client().create_model(
+        ModelRequestModel(
+            name=name,
+            license=license,
+            description=description,
+            audience=audience,
+            use_cases=use_cases,
+            trade_offs=tradeoffs,
+            ethic=ethical,
+            limitations=limitations,
+            tags=tag,
+            user=Client().active_user.id,
+            workspace=Client().active_workspace.id,
         )
-        if model_deployer_models is None:
-            error(
-                "No active model deployer found. Please add a model_deployer "
-                "to your stack."
-            )
+    )
+
+    cli_utils.print_pydantic_models(
+        [
+            model,
+        ],
+        exclude_columns=["user", "workspace"],
+    )
+
+
+@model.command("update", help="Update an existing model.")
+@click.argument("model_name_or_id")
+@click.option(
+    "--license",
+    "-l",
+    help="The license under which the model is created.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--description",
+    "-d",
+    help="The description of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--audience",
+    "-a",
+    help="The target audience for the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--use-cases",
+    "-u",
+    help="The use cases of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--tradeoffs",
+    help="The tradeoffs of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--ethical",
+    "-e",
+    help="The ethical implications of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--limitations",
+    help="The known limitations of the model.",
+    type=str,
+    required=False,
+)
+@click.option(
+    "--tag",
+    "-t",
+    help="Tags associated with the model.",
+    type=str,
+    required=False,
+    multiple=True,
+)
+def update_model(
+    model_name_or_id: str,
+    license: Optional[str],
+    description: Optional[str],
+    audience: Optional[str],
+    use_cases: Optional[str],
+    tradeoffs: Optional[str],
+    ethical: Optional[str],
+    limitations: Optional[str],
+    tag: Optional[List[str]],
+) -> None:
+    """Register a new model in the Model Control Plane.
+
+    Args:
+        model_name_or_id: The name of the model.
+        license: The license model created under.
+        description: The description of the model.
+        audience: The target audience of the model.
+        use_cases: The use cases of the model.
+        tradeoffs: The tradeoffs of the model.
+        ethical: The ethical implications of the model.
+        limitations: The know limitations of the model.
+        tag: Tags associated with the model.
+    """
+    model_id = Client().get_model(model_name_or_id=model_name_or_id).id
+    model = Client().update_model(
+        model_id=model_id,
+        model_update=ModelUpdateModel(
+            license=license,
+            description=description,
+            audience=audience,
+            use_cases=use_cases,
+            trade_offs=tradeoffs,
+            ethic=ethical,
+            limitations=limitations,
+            tags=tag,
+            user=Client().active_user.id,
+            workspace=Client().active_workspace.id,
+        ),
+    )
+
+    cli_utils.print_pydantic_models(
+        [
+            model,
+        ],
+        exclude_columns=["user", "workspace"],
+    )
+
+
+@model.command("delete", help="Delete an existing model.")
+@click.argument("model_name_or_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Don't ask for confirmation.",
+)
+def delete_model(
+    model_name_or_id: str,
+    yes: bool = False,
+) -> None:
+    """Delete an existing model from the Model Control Plane.
+
+    Args:
+        model_name_or_id: The ID or name of the model to delete.
+        yes: If set, don't ask for confirmation.
+    """
+    if not yes:
+        confirmation = cli_utils.confirmation(
+            f"Are you sure you want to delete model '{model_name_or_id}'?"
+        )
+        if not confirmation:
+            cli_utils.declare("Model deletion canceled.")
             return
-        ctx.obj = StackComponent.from_model(model_deployer_models[0])
 
-    @models.command(
-        "list",
-        help="Get a list of all served models within the model-deployer stack "
-        "component.",
-    )
-    @click.option(
-        "--pipeline",
-        "-p",
-        type=click.STRING,
-        default=None,
-        help="Show only served models that were deployed by the indicated "
-        "pipeline.",
-    )
-    @click.option(
-        "--step",
-        "-s",
-        type=click.STRING,
-        default=None,
-        help="Show only served models that were deployed by the indicated "
-        "pipeline step.",
-    )
-    @click.option(
-        "--pipeline-run",
-        "-r",
-        type=click.STRING,
-        default=None,
-        help="Show only served models that were deployed by the indicated "
-        "pipeline run.",
-    )
-    @click.option(
-        "--model",
-        "-m",
-        type=click.STRING,
-        default=None,
-        help="Show only served model versions for the given model name.",
-    )
-    @click.option(
-        "--running",
-        is_flag=True,
-        help="Show only model servers that are currently running.",
-    )
-    @click.pass_obj
-    def list_models(
-        model_deployer: "BaseModelDeployer",
-        pipeline: Optional[str],
-        step: Optional[str],
-        pipeline_run: Optional[str],
-        model: Optional[str],
-        running: bool,
-    ) -> None:
-        """List of all served models within the model-deployer stack component.
-
-        Args:
-            model_deployer: The model-deployer stack component.
-            pipeline: Show only served models that were deployed by the
-                indicated pipeline.
-            step: Show only served models that were deployed by the indicated
-                pipeline step.
-            pipeline_run: Show only served models that were deployed by the
-                indicated pipeline run.
-            model: Show only served model versions for the given model name.
-            running: Show only model servers that are currently running.
-        """
-        services = model_deployer.find_model_server(
-            running=running,
-            pipeline_name=pipeline,
-            pipeline_run_id=pipeline_run,
-            pipeline_step_name=step,
-            model_name=model,
+    try:
+        Client().delete_model(
+            model_name_or_id=model_name_or_id,
         )
-        if services:
-            pretty_print_model_deployer(
-                services,
-                model_deployer,
-            )
-        else:
-            warning("No served models found.")
+    except (KeyError, ValueError) as e:
+        cli_utils.error(str(e))
+    else:
+        cli_utils.declare(f"Model '{model_name_or_id}' deleted.")
 
-    @models.command("describe", help="Describe a specified served model.")
-    @click.argument("served_model_uuid", type=click.STRING)
-    @click.pass_obj
-    def describe_model(
-        model_deployer: "BaseModelDeployer", served_model_uuid: str
-    ) -> None:
-        """Describe a specified served model.
 
-        Args:
-            model_deployer: The model-deployer stack component.
-            served_model_uuid: The UUID of the served model.
-        """
-        served_models = model_deployer.find_model_server(
-            service_uuid=uuid.UUID(served_model_uuid)
-        )
-        if served_models:
-            print_served_model_configuration(served_models[0], model_deployer)
-            return
-        warning(f"No model with uuid: '{served_model_uuid}' could be found.")
+@model.group()
+def version() -> None:
+    """Interact with model versions in the Model Control Plane."""
+
+
+@cli_utils.list_options(ModelVersionFilterModel)
+@click.argument("model_name_or_id")
+@version.command("list", help="List model versions with filter.")
+def list_model_versions(model_name_or_id: str, **kwargs: Any) -> None:
+    """List model versions with filter in the Model Control Plane.
+
+    Args:
+        model_name_or_id: The ID or name of the model containing version.
+        **kwargs: Keyword arguments to filter models.
+    """
+    model_id = Client().get_model(model_name_or_id=model_name_or_id).id
+    model_versions = Client().list_model_versions(
+        ModelVersionFilterModel(model_id=model_id, **kwargs)
+    )
+
+    if not model_versions:
+        cli_utils.declare("No model versions found.")
         return
 
-    @models.command(
-        "get-url",
-        help="Return the prediction URL to a specified model server.",
-    )
-    @click.argument("served_model_uuid", type=click.STRING)
-    @click.pass_obj
-    def get_url(
-        model_deployer: "BaseModelDeployer", served_model_uuid: str
-    ) -> None:
-        """Return the prediction URL to a specified model server.
-
-        Args:
-            model_deployer: The model-deployer stack component.
-            served_model_uuid: The UUID of the served model.
-        """
-        served_models = model_deployer.find_model_server(
-            service_uuid=uuid.UUID(served_model_uuid)
+    for model_version in model_versions:
+        model_version.artifact_objects_count = len(  # type: ignore[attr-defined]
+            model_version.artifact_object_ids
         )
-        if served_models:
-            try:
-                prediction_url = model_deployer.get_model_server_info(
-                    served_models[0]
-                ).get("PREDICTION_URL")
-                prediction_hostname = (
-                    model_deployer.get_model_server_info(served_models[0]).get(
-                        "PREDICTION_HOSTNAME"
+        model_version.model_objects_count = len(model_version.model_object_ids)  # type: ignore[attr-defined]
+        model_version.deployments_count = len(model_version.deployment_ids)  # type: ignore[attr-defined]
+        model_version.pipeline_runs_count = len(model_version.pipeline_run_ids)  # type: ignore[attr-defined]
+
+    cli_utils.print_pydantic_models(
+        model_versions,
+        columns=[
+            "id",
+            "name",
+            "number",
+            "description",
+            "stage",
+            "artifact_objects_count",
+            "model_objects_count",
+            "deployments_count",
+            "pipeline_runs_count",
+            "updated",
+        ],
+    )
+
+
+@version.command("update", help="Update an existing model version stage.")
+@click.argument("model_name_or_id")
+@click.argument("model_version_name_or_number_or_id")
+@click.option(
+    "--stage",
+    "-s",
+    type=click.Choice(choices=ModelStages.values()),
+    help="The stage of the model version.",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Don't ask for confirmation, if stage already occupied.",
+)
+def update_model_version(
+    model_name_or_id: str,
+    model_version_name_or_number_or_id: str,
+    stage: str,
+    force: bool = False,
+) -> None:
+    """Update an existing model version stage in the Model Control Plane.
+
+    Args:
+        model_name_or_id: The ID or name of the model containing version.
+        model_version_name_or_number_or_id: The ID, number or name of the model version.
+        stage: The stage of the model version to be set.
+        force: Whether existing model version in target stage should be silently archived.
+    """
+    model_version = Client().get_model_version(
+        model_name_or_id=model_name_or_id,
+        model_version_name_or_number_or_id=model_version_name_or_number_or_id,
+    )
+    try:
+        Client().update_model_version(
+            model_version_id=model_version.id,
+            model_version_update_model=ModelVersionUpdateModel(
+                model=model_version.model.id, stage=stage, force=force
+            ),
+        )
+    except RuntimeError:
+        if not force:
+            cli_utils.print_pydantic_models(
+                Client().list_model_versions(
+                    ModelVersionFilterModel(
+                        stage=stage,
+                        model_id=model_version.model.id,
                     )
-                    or "No hostname specified for this service"
-                )
-                declare(
-                    f"  Prediction URL of Served Model {served_model_uuid} "
-                    f"is:\n"
-                    f"  {prediction_url}\n"
-                    f"  and the hostname is: {prediction_hostname}"
-                )
-            except KeyError:
-                warning("The deployed model instance has no 'prediction_url'.")
-            return
-        warning(f"No model with uuid: '{served_model_uuid}' could be found.")
+                ),
+                columns=[
+                    "id",
+                    "name",
+                    "number",
+                    "description",
+                    "stage",
+                    "artifact_objects_count",
+                    "model_objects_count",
+                    "deployments_count",
+                    "pipeline_runs_count",
+                    "updated",
+                ],
+            )
+            confirmation = cli_utils.confirmation(
+                "Are you sure you want to change the status of this model "
+                f"version to '{stage}'? This stage is already taken by "
+                "another model version and if you will proceed the current "
+                "model version in this stage will be archived."
+            )
+            if not confirmation:
+                cli_utils.declare("Model version stage update canceled.")
+                return
+            Client().update_model_version(
+                model_version_id=model_version.id,
+                model_version_update_model=ModelVersionUpdateModel(
+                    model=model_version.model.id, stage=stage, force=True
+                ),
+            )
+    cli_utils.declare(
+        f"Model version '{model_version.name}' stage updated to '{stage}'."
+    )
+
+
+def _print_artifacts_links_generic(
+    model_name_or_id: str,
+    model_version_name_or_number_or_id: str,
+    only_artifacts: bool = False,
+    only_deployments: bool = False,
+    only_model_objects: bool = False,
+    **kwargs: Any,
+) -> None:
+    """Generic method to print artifacts links.
+
+    Args:
+        model_name_or_id: The ID or name of the model containing version.
+        model_version_name_or_number_or_id: The name, number or ID of the model version.
+        only_artifacts: If set, only print artifacts.
+        only_deployments: If set, only print deployments.
+        only_model_objects: If set, only print model objects.
+        **kwargs: Keyword arguments to filter models.
+    """
+    model_version = Client().get_model_version(
+        model_name_or_id=model_name_or_id,
+        model_version_name_or_number_or_id=model_version_name_or_number_or_id,
+    )
+
+    if (
+        (only_artifacts and not model_version.artifact_object_ids)
+        or (only_deployments and not model_version.deployment_ids)
+        or (only_model_objects and not model_version.model_object_ids)
+    ):
+        _type = (
+            "artifacts"
+            if only_artifacts
+            else "deployments"
+            if only_deployments
+            else "model objects"
+        )
+        cli_utils.declare(f"No {_type} linked to the model version found.")
         return
 
-    @models.command("start", help="Start a specified model server.")
-    @click.argument("served_model_uuid", type=click.STRING)
-    @click.option(
-        "--timeout",
-        "-t",
-        type=click.INT,
-        default=300,
-        help="Time in seconds to wait for the model to start. Set to 0 to "
-        "return immediately after telling the server to start, without "
-        "waiting for it to become fully active (default: 300s).",
-    )
-    @click.pass_obj
-    def start_model_service(
-        model_deployer: "BaseModelDeployer",
-        served_model_uuid: str,
-        timeout: int,
-    ) -> None:
-        """Start a specified model server.
-
-        Args:
-            model_deployer: The model-deployer stack component.
-            served_model_uuid: The UUID of the served model.
-            timeout: Time in seconds to wait for the model to start.
-        """
-        served_models = model_deployer.find_model_server(
-            service_uuid=uuid.UUID(served_model_uuid)
+    links = Client().list_model_version_artifact_links(
+        ModelVersionArtifactFilterModel(
+            model_id=model_version.model.id,
+            model_version_id=model_version.id,
+            only_artifacts=only_artifacts,
+            only_deployments=only_deployments,
+            only_model_objects=only_model_objects,
+            **kwargs,
         )
-        if served_models:
-            model_deployer.start_model_server(
-                served_models[0].uuid, timeout=timeout
-            )
-            declare(f"Model server {served_models[0]} was started.")
-            return
+    )
 
-        warning(f"No model with uuid: '{served_model_uuid}' could be found.")
+    cli_utils.print_pydantic_models(
+        links,
+        columns=[
+            "pipeline_name",
+            "step_name",
+            "name",
+            "link_version",
+            "artifact",
+            "created",
+        ],
+    )
+
+
+@version.command(
+    "artifacts",
+    help="List artifacts linked to a model version.",
+)
+@click.argument("model_name_or_id")
+@click.argument("model_version_name_or_number_or_id")
+@cli_utils.list_options(ModelVersionArtifactFilterModel)
+def list_model_version_artifacts(
+    model_name_or_id: str,
+    model_version_name_or_number_or_id: str,
+    **kwargs: Any,
+) -> None:
+    """List artifacts linked to a model version in the Model Control Plane.
+
+    Args:
+        model_name_or_id: The ID or name of the model containing version.
+        model_version_name_or_number_or_id: The name, number or ID of the model version.
+        **kwargs: Keyword arguments to filter models.
+    """
+    _print_artifacts_links_generic(
+        model_name_or_id=model_name_or_id,
+        model_version_name_or_number_or_id=model_version_name_or_number_or_id,
+        only_artifacts=True,
+        **kwargs,
+    )
+
+
+@version.command(
+    "model_objects",
+    help="List model objects linked to a model version.",
+)
+@click.argument("model_name_or_id")
+@click.argument("model_version_name_or_number_or_id")
+@cli_utils.list_options(ModelVersionArtifactFilterModel)
+def list_model_version_model_objects(
+    model_name_or_id: str,
+    model_version_name_or_number_or_id: str,
+    **kwargs: Any,
+) -> None:
+    """List model objects linked to a model version in the Model Control Plane.
+
+    Args:
+        model_name_or_id: The ID or name of the model containing version.
+        model_version_name_or_number_or_id: The name, number or ID of the model version.
+        **kwargs: Keyword arguments to filter models.
+    """
+    _print_artifacts_links_generic(
+        model_name_or_id=model_name_or_id,
+        model_version_name_or_number_or_id=model_version_name_or_number_or_id,
+        only_model_objects=True,
+        **kwargs,
+    )
+
+
+@version.command(
+    "deployments",
+    help="List deployments linked to a model version.",
+)
+@click.argument("model_name_or_id")
+@click.argument("model_version_name_or_number_or_id")
+@cli_utils.list_options(ModelVersionArtifactFilterModel)
+def list_model_version_deployments(
+    model_name_or_id: str,
+    model_version_name_or_number_or_id: str,
+    **kwargs: Any,
+) -> None:
+    """List deployments linked to a model version in the Model Control Plane.
+
+    Args:
+        model_name_or_id: The ID or name of the model containing version.
+        model_version_name_or_number_or_id: The name, number or ID of the model version.
+        **kwargs: Keyword arguments to filter models.
+    """
+    _print_artifacts_links_generic(
+        model_name_or_id=model_name_or_id,
+        model_version_name_or_number_or_id=model_version_name_or_number_or_id,
+        only_deployments=True,
+        **kwargs,
+    )
+
+
+@version.command(
+    "runs",
+    help="List pipeline runs of a model version.",
+)
+@click.argument("model_name_or_id")
+@click.argument("model_version_name_or_number_or_id")
+@cli_utils.list_options(ModelVersionPipelineRunFilterModel)
+def list_model_version_pipeline_runs(
+    model_name_or_id: str,
+    model_version_name_or_number_or_id: str,
+    **kwargs: Any,
+) -> None:
+    """List pipeline runs of a model version in the Model Control Plane.
+
+    Args:
+        model_name_or_id: The ID or name of the model containing version.
+        model_version_name_or_number_or_id: The name, number or ID of the model version.
+        **kwargs: Keyword arguments to filter models.
+    """
+    model_version = Client().get_model_version(
+        model_name_or_id=model_name_or_id,
+        model_version_name_or_number_or_id=model_version_name_or_number_or_id,
+    )
+
+    if not model_version.pipeline_run_ids:
+        cli_utils.declare("No pipeline runs attached to model version found.")
         return
 
-    @models.command("stop", help="Stop a specified model server.")
-    @click.argument("served_model_uuid", type=click.STRING)
-    @click.option(
-        "--timeout",
-        "-t",
-        type=click.INT,
-        default=300,
-        help="Time in seconds to wait for the model to start. Set to 0 to "
-        "return immediately after telling the server to stop, without "
-        "waiting for it to become inactive (default: 300s).",
-    )
-    @click.option(
-        "--yes",
-        "-y",
-        "force",
-        is_flag=True,
-        help="Force the model server to stop. This will bypass any graceful "
-        "shutdown processes and try to force the model server to stop "
-        "immediately, if possible.",
-    )
-    @click.option(
-        "--force",
-        "-f",
-        "old_force",
-        is_flag=True,
-        help="DEPRECATED: Force the model server to stop. This will bypass "
-        "any graceful shutdown processes and try to force the model "
-        "server to stop immediately, if possible. Use `-y/--yes` instead.",
-    )
-    @click.pass_obj
-    def stop_model_service(
-        model_deployer: "BaseModelDeployer",
-        served_model_uuid: str,
-        timeout: int,
-        force: bool,
-        old_force: bool,
-    ) -> None:
-        """Stop a specified model server.
-
-        Args:
-            model_deployer: The model-deployer stack component.
-            served_model_uuid: The UUID of the served model.
-            timeout: Time in seconds to wait for the model to stop.
-            force: Force the model server to stop.
-            old_force: DEPRECATED: Force the model server to stop.
-        """
-        if old_force:
-            force = old_force
-            warning(
-                "The `--force` flag will soon be deprecated. Use `--yes` or "
-                "`-y` instead."
-            )
-        served_models = model_deployer.find_model_server(
-            service_uuid=uuid.UUID(served_model_uuid)
+    links = Client().list_model_version_pipeline_run_links(
+        ModelVersionPipelineRunFilterModel(
+            model_id=model_version.model.id,
+            model_version_id=model_version.id,
+            **kwargs,
         )
-        if served_models:
-            model_deployer.stop_model_server(
-                served_models[0].uuid, timeout=timeout, force=force
-            )
-            declare(f"Model server {served_models[0]} was stopped.")
-            return
-
-        warning(f"No model with uuid: '{served_model_uuid}' could be found.")
-        return
-
-    @models.command("delete", help="Delete a specified model server.")
-    @click.argument("served_model_uuid", type=click.STRING)
-    @click.option(
-        "--timeout",
-        "-t",
-        type=click.INT,
-        default=300,
-        help="Time in seconds to wait for the model to be deleted. Set to 0 to "
-        "return immediately after stopping and deleting the model server, "
-        "without waiting for it to release all allocated resources.",
     )
-    @click.option(
-        "--yes",
-        "-y",
-        "force",
-        is_flag=True,
-        help="Force the model server to stop and delete. This will bypass any "
-        "graceful shutdown processes and try to force the model server to "
-        "stop and delete immediately, if possible.",
-    )
-    @click.option(
-        "--force",
-        "-f",
-        "old_force",
-        is_flag=True,
-        help="DEPRECATED: Force the model server to stop and delete. This will "
-        "bypass any graceful shutdown processes and try to force the model "
-        "server to stop and delete immediately, if possible. Use `-y/--yes` "
-        "instead.",
-    )
-    @click.pass_obj
-    def delete_model_service(
-        model_deployer: "BaseModelDeployer",
-        served_model_uuid: str,
-        timeout: int,
-        force: bool,
-        old_force: bool,
-    ) -> None:
-        """Delete a specified model server.
 
-        Args:
-            model_deployer: The model-deployer stack component.
-            served_model_uuid: The UUID of the served model.
-            timeout: Time in seconds to wait for the model to be deleted.
-            force: Force the model server to stop and delete.
-            old_force: DEPRECATED: Force the model server to stop and delete.
-        """
-        if old_force:
-            force = old_force
-            warning(
-                "The `--force` flag will soon be deprecated. Use `--yes` or "
-                "`-y` instead."
-            )
-        served_models = model_deployer.find_model_server(
-            service_uuid=uuid.UUID(served_model_uuid)
-        )
-        if served_models:
-            model_deployer.delete_model_server(
-                served_models[0].uuid, timeout=timeout, force=force
-            )
-            declare(f"Model server {served_models[0]} was deleted.")
-            return
-
-        warning(f"No model with uuid: '{served_model_uuid}' could be found.")
-        return
-
-    @models.command("logs", help="Show the logs for a model server.")
-    @click.argument("served_model_uuid", type=click.STRING)
-    @click.option(
-        "--follow",
-        "-f",
-        is_flag=True,
-        help="Continue to output new log data as it becomes available.",
+    cli_utils.print_pydantic_models(
+        links,
+        columns=[
+            "name",
+            "pipeline_run",
+            "created",
+        ],
     )
-    @click.option(
-        "--tail",
-        "-t",
-        type=click.INT,
-        default=None,
-        help="Only show the last NUM lines of log output.",
-    )
-    @click.option(
-        "--raw",
-        "-r",
-        is_flag=True,
-        help="Show raw log contents (don't pretty-print logs).",
-    )
-    @click.pass_obj
-    def get_model_service_logs(
-        model_deployer: "BaseModelDeployer",
-        served_model_uuid: str,
-        follow: bool,
-        tail: Optional[int],
-        raw: bool,
-    ) -> None:
-        """Display the logs for a model server.
-
-        Args:
-            model_deployer: The model-deployer stack component.
-            served_model_uuid: The UUID of the served model.
-            follow: Continue to output new log data as it becomes available.
-            tail: Only show the last NUM lines of log output.
-            raw: Show raw log contents (don't pretty-print logs).
-        """
-        served_models = model_deployer.find_model_server(
-            service_uuid=uuid.UUID(served_model_uuid)
-        )
-        if not served_models:
-            warning(
-                f"No model with uuid: '{served_model_uuid}' could be found."
-            )
-            return
-
-        for line in model_deployer.get_model_server_logs(
-            served_models[0].uuid, follow=follow, tail=tail
-        ):
-            # don't pretty-print log lines that are already pretty-printed
-            if raw or line.startswith("\x1b["):
-                console.print(line, markup=False)
-            else:
-                try:
-                    console.print(line)
-                except MarkupError:
-                    console.print(line, markup=False)

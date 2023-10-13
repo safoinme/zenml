@@ -1,6 +1,6 @@
 name: Integration Tests
 
-on: 
+on:
   workflow_call:
     inputs:
       os:
@@ -41,10 +41,10 @@ on:
         description: 'Python version'
         type: choice
         options:
-          - '3.7'
           - '3.8'
           - '3.9'
           - '3.10'
+          - '3.11'
         required: false
         default: '3.8'
       test_environment:
@@ -54,17 +54,14 @@ on:
           # Default ZenML deployments
           - default
           - default-docker-orchestrator
-          - default-kubeflow-orchestrator
           - default-airflow-orchestrator
           # Local ZenML server deployments
           - local-server
           - local-server-docker-orchestrator
-          - local-server-kubeflow-orchestrator
           - local-server-airflow-orchestrator
           # Local ZenML docker-compose server deployments
           - docker-server
           - docker-server-docker-orchestrator
-          - docker-server-kubeflow-orchestrator
           - docker-server-airflow-orchestrator
           # AWS ZenML server deployment with local components
           - aws-local-orchestrator
@@ -77,6 +74,7 @@ on:
           - aws-cloud-kubeflow-orchestrator
           - aws-cloud-kubernetes-orchestrator
           - aws-cloud-tekton-orchestrator
+          - aws-cloud-sagemaker-orchestrator
           # GCP ZenML server deployment with local components
           - gcp-local-orchestrator
           - gcp-docker-orchestrator
@@ -109,9 +107,11 @@ on:
 
 jobs:
 
-  integrationtest:
-    name: integrationtest
+  integration-and-template-tests:
+    name: integration-and-template-tests
     runs-on: ${{ inputs.os }}
+    strategy:
+      fail-fast: false
     env:
       ZENML_DEBUG: 1
       ZENML_ANALYTICS_OPT_IN: false
@@ -129,6 +129,7 @@ jobs:
       GCP_US_EAST4_SERVER_URL: ${{ secrets.GCP_US_EAST4_SERVER_URL }}
       GCP_US_EAST4_SERVER_USERNAME: ${{ secrets.GCP_US_EAST4_SERVER_USERNAME }}
       GCP_US_EAST4_SERVER_PASSWORD: ${{ secrets.GCP_US_EAST4_SERVER_PASSWORD }}
+    if: ${{ ! startsWith(github.event.head_commit.message, 'GitBook:') }}
 
     defaults:
       run:
@@ -151,7 +152,7 @@ jobs:
           sudo systemctl restart docker
         if: runner.os=='Linux' && (contains(inputs.test_environment, 'docker') || contains(inputs.test_environment, 'kubeflow') || contains(inputs.test_environment, 'airflow') || contains(inputs.test_environment, 'kubernetes'))
 
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
@@ -172,12 +173,16 @@ jobs:
           install_components: 'gke-gcloud-auth-plugin'
         if: contains(inputs.test_environment, 'gcp')
 
-      - name: Setup environment with Poetry
+      - name: Setup environment
         uses: ./.github/actions/setup_environment
         with:
           cache_version: ${{ secrets.GH_ACTIONS_CACHE_KEY }}
           python-version: ${{ inputs.python-version }}
           os: ${{ inputs.os }}
+
+      - name: Install docker-compose for non-default environments
+        if: inputs.test_environment != 'default'
+        run: pip install docker-compose
 
       - name: Install Linux System Dependencies
         if: runner.os=='Linux'
@@ -194,13 +199,16 @@ jobs:
       - name: Install Docker and Colima on MacOS
         if: runner.os=='macOS'
         run: |
+          export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+          brew update
           brew install docker colima
+          brew reinstall --force qemu
 
           # We need to mount the /private/tmp/zenml-test/ folder because
           # this folder is also mounted in the Docker containers that are
           # started by local ZenML orchestrators.
           colima start --mount /private/tmp/zenml-test/:w
-          
+
           # This is required for the Docker Python SDK to work
           sudo ln -sf $HOME/.colima/default/docker.sock /var/run/docker.sock
 
@@ -220,41 +228,6 @@ jobs:
         run: |
           curl -s https://raw.githubusercontent.com/rancher/k3d/main/install.sh | bash
         if: runner.os!='Windows' && contains(inputs.test_environment, 'kubeflow')
-
-      - name: Install Prerequisites - Stage 1
-        run: |
-          source $VENV
-          # install integrations: round 1
-          zenml integration export-requirements --output-file requirements.txt --ignore-integration feast --ignore-integration label_studio --ignore-integration bentoml --ignore-integration seldon --ignore-integration kserve
-          pip install -r requirements.txt
-          rm requirements.txt
-
-      # - name: Install Prerequisites - Stage 2
-      #   run: |
-      #     source $VENV
-      #     # install integrations: round 2, needed because:
-      #     #  - kserve requires a tritonclient version that is lower that the one needed by mlflow
-      #     #  - seldon requires a prometheus-client version that is lower that the one needed by bentoml
-      #     #  - kserve requires a ray version that is not available on python 3.10
-      #     zenml integration export-requirements --output-file requirements.txt seldon kserve
-      #     pip install -r requirements.txt
-      #     rm requirements.txt
-      #   if: inputs.python-version != '3.10'
-
-      - name: Install Prerequisites - Stage 3
-        run: |
-          source $VENV
-          # re-install zenml to be sure
-          poetry install --extras server
-          # install airflow requirements
-          pip install apache-airflow-providers-docker
-
-      - name: Check Python Env ahead of tests
-        run: |
-          source $VENV
-          zenml integration list
-          pip list
-          pip check || true
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -289,7 +262,6 @@ jobs:
 
       - name: Test
         run: |
-          source $VENV
           bash scripts/test-coverage-xml.sh integration ${{ inputs.test_environment }}
 
       - name: Setup tmate session after tests
@@ -300,7 +272,6 @@ jobs:
 
       - name: Verify Python Env unaffected
         run: |
-          source $VENV
           zenml integration list
           pip list
           pip check || true

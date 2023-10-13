@@ -12,33 +12,34 @@
 #  or implied. See the License for the specific language governing
 #  permissions and limitations under the License.
 """SQLModel implementation of step run tables."""
-
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, List, Optional
 from uuid import UUID
 
-from pydantic.json import pydantic_encoder
 from sqlalchemy import TEXT, Column
 from sqlmodel import Field, Relationship, SQLModel
 
 from zenml.config.step_configurations import Step
-from zenml.constants import STEP_SOURCE_PARAMETER_NAME
 from zenml.enums import ExecutionStatus
 from zenml.models.step_run_models import (
     StepRunRequestModel,
     StepRunResponseModel,
     StepRunUpdateModel,
 )
-from zenml.zen_stores.schemas.artifact_schemas import ArtifactSchema
 from zenml.zen_stores.schemas.base_schemas import NamedSchema
+from zenml.zen_stores.schemas.pipeline_deployment_schemas import (
+    PipelineDeploymentSchema,
+)
 from zenml.zen_stores.schemas.pipeline_run_schemas import PipelineRunSchema
-from zenml.zen_stores.schemas.project_schemas import ProjectSchema
 from zenml.zen_stores.schemas.schema_utils import build_foreign_key_field
 from zenml.zen_stores.schemas.user_schemas import UserSchema
+from zenml.zen_stores.schemas.workspace_schemas import WorkspaceSchema
 
 if TYPE_CHECKING:
-    from zenml.models import ArtifactResponseModel
+    from zenml.zen_stores.schemas.artifact_schemas import ArtifactSchema
+    from zenml.zen_stores.schemas.logs_schemas import LogsSchema
+    from zenml.zen_stores.schemas.run_metadata_schemas import RunMetadataSchema
 
 
 class StepRunSchema(NamedSchema, table=True):
@@ -46,17 +47,17 @@ class StepRunSchema(NamedSchema, table=True):
 
     __tablename__ = "step_run"
 
-    pipeline_run_id: UUID = build_foreign_key_field(
-        source=__tablename__,
-        target=PipelineRunSchema.__tablename__,
-        source_column="pipeline_run_id",
-        target_column="id",
-        ondelete="CASCADE",
-        nullable=False,
-    )
-    pipeline_run: "PipelineRunSchema" = Relationship(
-        back_populates="step_runs"
-    )
+    # Fields
+    start_time: Optional[datetime] = Field(nullable=True)
+    end_time: Optional[datetime] = Field(nullable=True)
+    status: ExecutionStatus = Field(nullable=False)
+
+    docstring: Optional[str] = Field(sa_column=Column(TEXT, nullable=True))
+    cache_key: Optional[str] = Field(nullable=True)
+    source_code: Optional[str] = Field(sa_column=Column(TEXT, nullable=True))
+    code_hash: Optional[str] = Field(nullable=True)
+
+    # Foreign keys
     original_step_run_id: Optional[UUID] = build_foreign_key_field(
         source=__tablename__,
         target=__tablename__,
@@ -65,7 +66,22 @@ class StepRunSchema(NamedSchema, table=True):
         ondelete="SET NULL",
         nullable=True,
     )
-
+    deployment_id: UUID = build_foreign_key_field(
+        source=__tablename__,
+        target=PipelineDeploymentSchema.__tablename__,
+        source_column="deployment_id",
+        target_column="id",
+        ondelete="CASCADE",
+        nullable=False,
+    )
+    pipeline_run_id: UUID = build_foreign_key_field(
+        source=__tablename__,
+        target=PipelineRunSchema.__tablename__,
+        source_column="pipeline_run_id",
+        target_column="id",
+        ondelete="CASCADE",
+        nullable=False,
+    )
     user_id: Optional[UUID] = build_foreign_key_field(
         source=__tablename__,
         target=UserSchema.__tablename__,
@@ -74,52 +90,38 @@ class StepRunSchema(NamedSchema, table=True):
         ondelete="SET NULL",
         nullable=True,
     )
-    user: Optional["UserSchema"] = Relationship(back_populates="step_runs")
-
-    project_id: UUID = build_foreign_key_field(
+    workspace_id: UUID = build_foreign_key_field(
         source=__tablename__,
-        target=ProjectSchema.__tablename__,
-        source_column="project_id",
+        target=WorkspaceSchema.__tablename__,
+        source_column="workspace_id",
         target_column="id",
         ondelete="CASCADE",
         nullable=False,
     )
-    project: "ProjectSchema" = Relationship(back_populates="step_runs")
 
-    enable_cache: Optional[bool] = Field(nullable=True)
-    code_hash: Optional[str] = Field(nullable=True)
-    cache_key: Optional[str] = Field(nullable=True)
-    start_time: Optional[datetime] = Field(nullable=True)
-    end_time: Optional[datetime] = Field(nullable=True)
-    status: ExecutionStatus
-    entrypoint_name: str
-    parameters: str = Field(sa_column=Column(TEXT, nullable=False))
-    step_configuration: str = Field(sa_column=Column(TEXT, nullable=False))
-    caching_parameters: Optional[str] = Field(
-        sa_column=Column(TEXT, nullable=True)
+    # Relationships
+    workspace: "WorkspaceSchema" = Relationship(back_populates="step_runs")
+    user: Optional["UserSchema"] = Relationship(back_populates="step_runs")
+    deployment: "PipelineDeploymentSchema" = Relationship(
+        back_populates="step_runs"
     )
-    docstring: Optional[str] = Field(sa_column=Column(TEXT, nullable=True))
-    source_code: Optional[str] = Field(sa_column=Column(TEXT, nullable=True))
-    num_outputs: Optional[int]
-
-    input_artifacts: List["StepRunInputArtifactSchema"] = Relationship(
+    run_metadata: List["RunMetadataSchema"] = Relationship(
         back_populates="step_run", sa_relationship_kwargs={"cascade": "delete"}
+    )
+    input_artifacts: List["StepRunInputArtifactSchema"] = Relationship(
+        sa_relationship_kwargs={"cascade": "delete"}
     )
     output_artifacts: List["StepRunOutputArtifactSchema"] = Relationship(
-        back_populates="step_run", sa_relationship_kwargs={"cascade": "delete"}
+        sa_relationship_kwargs={"cascade": "delete"}
+    )
+    logs: Optional["LogsSchema"] = Relationship(
+        back_populates="step_run",
+        sa_relationship_kwargs={"cascade": "delete", "uselist": False},
     )
     parents: List["StepRunParentsSchema"] = Relationship(
-        back_populates="child",
         sa_relationship_kwargs={
             "cascade": "delete",
             "primaryjoin": "StepRunParentsSchema.child_id == StepRunSchema.id",
-        },
-    )
-    children: List["StepRunParentsSchema"] = Relationship(
-        back_populates="parent",
-        sa_relationship_kwargs={
-            "cascade": "delete",
-            "primaryjoin": "StepRunParentsSchema.parent_id == StepRunSchema.id",
         },
     )
 
@@ -133,73 +135,76 @@ class StepRunSchema(NamedSchema, table=True):
         Returns:
             The step run schema.
         """
-        step_config = request.step.config
         return cls(
             name=request.name,
-            pipeline_run_id=request.pipeline_run_id,
-            original_step_run_id=request.original_step_run_id,
-            project_id=request.project,
+            workspace_id=request.workspace,
             user_id=request.user,
-            enable_cache=step_config.enable_cache,
-            code_hash=step_config.caching_parameters.get(
-                STEP_SOURCE_PARAMETER_NAME
-            ),
-            cache_key=request.cache_key,
             start_time=request.start_time,
             end_time=request.end_time,
-            entrypoint_name=step_config.name,
-            parameters=json.dumps(
-                step_config.parameters,
-                default=pydantic_encoder,
-                sort_keys=True,
-            ),
-            step_configuration=request.step.json(sort_keys=True),
-            caching_parameters=json.dumps(
-                step_config.caching_parameters,
-                default=pydantic_encoder,
-                sort_keys=True,
-            ),
-            docstring=request.docstring,
-            source_code=request.source_code,
-            num_outputs=len(step_config.outputs),
             status=request.status,
+            original_step_run_id=request.original_step_run_id,
+            pipeline_run_id=request.pipeline_run_id,
+            deployment_id=request.deployment,
+            docstring=request.docstring,
+            cache_key=request.cache_key,
+            code_hash=request.code_hash,
+            source_code=request.source_code,
         )
 
-    def to_model(
-        self,
-        parent_step_ids: List[UUID],
-        input_artifacts: Dict[str, "ArtifactResponseModel"],
-        output_artifacts: Dict[str, "ArtifactResponseModel"],
-    ) -> StepRunResponseModel:
+    def to_model(self) -> StepRunResponseModel:
         """Convert a `StepRunSchema` to a `StepRunModel`.
-
-        Args:
-            parent_step_ids: The parent step ids to link to the step.
-            input_artifacts: The input artifacts to link to the step.
-            output_artifacts: The output artifacts to link to the step.
 
         Returns:
             The created StepRunModel.
         """
+        metadata = {
+            metadata_schema.key: metadata_schema.to_model()
+            for metadata_schema in self.run_metadata
+        }
+
+        input_artifacts = {
+            artifact.name: artifact.artifact.to_model()
+            for artifact in self.input_artifacts
+        }
+
+        output_artifacts = {
+            artifact.name: artifact.artifact.to_model()
+            for artifact in self.output_artifacts
+        }
+
+        full_step_config = Step.parse_obj(
+            json.loads(self.deployment.step_configurations)[self.name]
+        )
+
         return StepRunResponseModel(
             id=self.id,
+            # Attributes from the StepRunBaseModel
             name=self.name,
-            pipeline_run_id=self.pipeline_run_id,
-            original_step_run_id=self.original_step_run_id,
-            project=self.project.to_model(),
-            user=self.user.to_model() if self.user else None,
-            parent_step_ids=parent_step_ids,
-            cache_key=self.cache_key,
             start_time=self.start_time,
             end_time=self.end_time,
-            step=Step.parse_raw(self.step_configuration),
             status=self.status,
+            cache_key=self.cache_key,
+            code_hash=self.code_hash,
             docstring=self.docstring,
             source_code=self.source_code,
+            config=full_step_config.config,
+            spec=full_step_config.spec,
+            deployment_id=self.deployment_id,
+            pipeline_run_id=self.pipeline_run_id,
+            original_step_run_id=self.original_step_run_id,
+            parent_step_ids=[p.parent_id for p in self.parents],
+            # Attributes from the WorkspaceScopedResponseModel
+            user=self.deployment.user.to_model(_block_recursion=True)
+            if self.deployment.user
+            else None,
+            workspace=self.deployment.workspace.to_model(),
             created=self.created,
             updated=self.updated,
-            input_artifacts=input_artifacts,
-            output_artifacts=output_artifacts,
+            # Attributes from the StepRunResponseModel
+            inputs=input_artifacts,
+            outputs=output_artifacts,
+            metadata=metadata,
+            logs=self.logs.to_model() if self.logs else None,
         )
 
     def update(self, step_update: StepRunUpdateModel) -> "StepRunSchema":
@@ -229,6 +234,7 @@ class StepRunParentsSchema(SQLModel, table=True):
 
     __tablename__ = "step_run_parents"
 
+    # Foreign Keys
     parent_id: UUID = build_foreign_key_field(
         source=__tablename__,
         target=StepRunSchema.__tablename__,
@@ -237,12 +243,6 @@ class StepRunParentsSchema(SQLModel, table=True):
         ondelete="CASCADE",
         nullable=False,
         primary_key=True,
-    )
-    parent: StepRunSchema = Relationship(
-        back_populates="children",
-        sa_relationship_kwargs={
-            "primaryjoin": "StepRunParentsSchema.parent_id == StepRunSchema.id"
-        },
     )
     child_id: UUID = build_foreign_key_field(
         source=__tablename__,
@@ -253,12 +253,6 @@ class StepRunParentsSchema(SQLModel, table=True):
         nullable=False,
         primary_key=True,
     )
-    child: StepRunSchema = Relationship(
-        back_populates="parents",
-        sa_relationship_kwargs={
-            "primaryjoin": "StepRunParentsSchema.child_id == StepRunSchema.id"
-        },
-    )
 
 
 class StepRunInputArtifactSchema(SQLModel, table=True):
@@ -266,6 +260,10 @@ class StepRunInputArtifactSchema(SQLModel, table=True):
 
     __tablename__ = "step_run_input_artifact"
 
+    # Fields
+    name: str = Field(nullable=False, primary_key=True)
+
+    # Foreign keys
     step_id: UUID = build_foreign_key_field(
         source=__tablename__,
         target=StepRunSchema.__tablename__,
@@ -275,20 +273,19 @@ class StepRunInputArtifactSchema(SQLModel, table=True):
         nullable=False,
         primary_key=True,
     )
-    step_run: StepRunSchema = Relationship(back_populates="input_artifacts")
     artifact_id: UUID = build_foreign_key_field(
         source=__tablename__,
-        target=ArtifactSchema.__tablename__,
+        target="artifact",  # TODO: Find a way for ArtifactSchema.__tablename__
         source_column="artifact_id",
         target_column="id",
         ondelete="CASCADE",
         nullable=False,
         primary_key=True,
     )
-    artifact: ArtifactSchema = Relationship(
-        back_populates="input_to_step_runs"
-    )
-    name: str
+
+    # Relationships
+    step_run: "StepRunSchema" = Relationship(back_populates="input_artifacts")
+    artifact: "ArtifactSchema" = Relationship()
 
 
 class StepRunOutputArtifactSchema(SQLModel, table=True):
@@ -296,6 +293,10 @@ class StepRunOutputArtifactSchema(SQLModel, table=True):
 
     __tablename__ = "step_run_output_artifact"
 
+    # Fields
+    name: str
+
+    # Foreign keys
     step_id: UUID = build_foreign_key_field(
         source=__tablename__,
         target=StepRunSchema.__tablename__,
@@ -305,17 +306,19 @@ class StepRunOutputArtifactSchema(SQLModel, table=True):
         nullable=False,
         primary_key=True,
     )
-    step_run: StepRunSchema = Relationship(back_populates="output_artifacts")
+
     artifact_id: UUID = build_foreign_key_field(
         source=__tablename__,
-        target=ArtifactSchema.__tablename__,
+        target="artifact",  # TODO: Find a way for ArtifactSchema.__tablename__
         source_column="artifact_id",
         target_column="id",
         ondelete="CASCADE",
         nullable=False,
         primary_key=True,
     )
-    artifact: ArtifactSchema = Relationship(
+
+    # Relationship
+    step_run: "StepRunSchema" = Relationship(back_populates="output_artifacts")
+    artifact: "ArtifactSchema" = Relationship(
         back_populates="output_of_step_runs"
     )
-    name: str

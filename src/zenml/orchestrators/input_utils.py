@@ -13,7 +13,7 @@
 #  permissions and limitations under the License.
 """Utilities for inputs."""
 
-from typing import TYPE_CHECKING, Dict, List, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from zenml.client import Client
@@ -22,17 +22,21 @@ from zenml.exceptions import InputResolutionError
 from zenml.models import StepRunFilterModel
 
 if TYPE_CHECKING:
+    from zenml.model.model_config import ModelConfig
     from zenml.models.artifact_models import ArtifactResponseModel
 
 
 def resolve_step_inputs(
-    step: "Step", run_id: UUID
+    step: "Step",
+    run_id: UUID,
+    model_config: Optional["ModelConfig"] = None,
 ) -> Tuple[Dict[str, "ArtifactResponseModel"], List[UUID]]:
     """Resolves inputs for the current step.
 
     Args:
         step: The step for which to resolve the inputs.
         run_id: The ID of the current pipeline run.
+        model_config: The model config of the step (from step or pipeline).
 
     Raises:
         InputResolutionError: If input resolving failed due to a missing
@@ -43,7 +47,7 @@ def resolve_step_inputs(
         current step.
     """
     current_run_steps = {
-        run_step.step.config.name: run_step
+        run_step.name: run_step
         for run_step in Client()
         .zen_store.list_run_steps(StepRunFilterModel(pipeline_run_id=run_id))
         .items
@@ -59,7 +63,7 @@ def resolve_step_inputs(
             )
 
         try:
-            artifact = step_run.output_artifacts[input_.output_name]
+            artifact = step_run.outputs[input_.output_name]
         except KeyError:
             raise InputResolutionError(
                 f"No output `{input_.output_name}` found for step "
@@ -67,6 +71,15 @@ def resolve_step_inputs(
             )
 
         input_artifacts[name] = artifact
+
+    for (
+        name,
+        external_artifact,
+    ) in step.config.external_input_artifacts.items():
+        artifact_id = external_artifact.get_artifact_id(
+            model_config=model_config
+        )
+        input_artifacts[name] = Client().get_artifact(artifact_id=artifact_id)
 
     parent_step_ids = [
         current_run_steps[upstream_step].id

@@ -16,12 +16,12 @@ import os
 import re
 from pathlib import Path, PurePath
 from typing import (
-    TYPE_CHECKING,
     Any,
     ClassVar,
     Dict,
     List,
     Optional,
+    Tuple,
     Type,
     TypeVar,
     Union,
@@ -34,22 +34,39 @@ import urllib3
 from pydantic import BaseModel, root_validator, validator
 
 import zenml
+from zenml.analytics import source_context
 from zenml.config.global_config import GlobalConfiguration
+from zenml.config.secrets_store_config import SecretsStoreConfiguration
 from zenml.config.store_config import StoreConfiguration
 from zenml.constants import (
     API,
+    API_TOKEN,
     ARTIFACTS,
+    CODE_REPOSITORIES,
     CURRENT_USER,
+    DEFAULT_HTTP_TIMEOUT,
+    DEVICES,
     DISABLE_CLIENT_SERVER_MISMATCH_WARNING,
     ENV_ZENML_DISABLE_CLIENT_SERVER_MISMATCH_WARNING,
     FLAVORS,
+    GET_OR_CREATE,
     INFO,
+    LATEST_MODEL_VERSION_PLACEHOLDER,
     LOGIN,
+    MODEL_VERSIONS,
+    MODELS,
+    PIPELINE_BUILDS,
+    PIPELINE_DEPLOYMENTS,
     PIPELINES,
-    PROJECTS,
     ROLES,
+    RUN_METADATA,
     RUNS,
     SCHEDULES,
+    SERVICE_CONNECTOR_CLIENT,
+    SERVICE_CONNECTOR_RESOURCES,
+    SERVICE_CONNECTOR_TYPES,
+    SERVICE_CONNECTOR_VERIFY,
+    SERVICE_CONNECTORS,
     STACK_COMPONENTS,
     STACKS,
     STEPS,
@@ -58,15 +75,11 @@ from zenml.constants import (
     USER_ROLE_ASSIGNMENTS,
     USERS,
     VERSION_1,
+    WORKSPACES,
 )
-from zenml.enums import StoreType
+from zenml.enums import ModelStages, SecretsStoreType, StoreType
 from zenml.exceptions import (
     AuthorizationException,
-    DoesNotExistException,
-    EntityExistsError,
-    IllegalOperationError,
-    StackComponentExistsError,
-    StackExistsError,
 )
 from zenml.io import fileio
 from zenml.logger import get_logger
@@ -75,6 +88,10 @@ from zenml.models import (
     ArtifactRequestModel,
     ArtifactResponseModel,
     BaseFilterModel,
+    CodeRepositoryFilterModel,
+    CodeRepositoryRequestModel,
+    CodeRepositoryResponseModel,
+    CodeRepositoryUpdateModel,
     ComponentFilterModel,
     ComponentRequestModel,
     ComponentResponseModel,
@@ -82,6 +99,30 @@ from zenml.models import (
     FlavorFilterModel,
     FlavorRequestModel,
     FlavorResponseModel,
+    FlavorUpdateModel,
+    ModelFilterModel,
+    ModelRequestModel,
+    ModelResponseModel,
+    ModelUpdateModel,
+    ModelVersionArtifactFilterModel,
+    ModelVersionArtifactRequestModel,
+    ModelVersionArtifactResponseModel,
+    ModelVersionFilterModel,
+    ModelVersionPipelineRunFilterModel,
+    ModelVersionPipelineRunRequestModel,
+    ModelVersionPipelineRunResponseModel,
+    ModelVersionRequestModel,
+    ModelVersionResponseModel,
+    ModelVersionUpdateModel,
+    OAuthDeviceFilterModel,
+    OAuthDeviceResponseModel,
+    OAuthDeviceUpdateModel,
+    PipelineBuildFilterModel,
+    PipelineBuildRequestModel,
+    PipelineBuildResponseModel,
+    PipelineDeploymentFilterModel,
+    PipelineDeploymentRequestModel,
+    PipelineDeploymentResponseModel,
     PipelineFilterModel,
     PipelineRequestModel,
     PipelineResponseModel,
@@ -90,17 +131,21 @@ from zenml.models import (
     PipelineRunResponseModel,
     PipelineRunUpdateModel,
     PipelineUpdateModel,
-    ProjectFilterModel,
-    ProjectRequestModel,
-    ProjectResponseModel,
-    ProjectUpdateModel,
     RoleFilterModel,
     RoleRequestModel,
     RoleResponseModel,
     RoleUpdateModel,
+    RunMetadataRequestModel,
+    RunMetadataResponseModel,
     ScheduleRequestModel,
     ScheduleResponseModel,
     ScheduleUpdateModel,
+    ServiceConnectorFilterModel,
+    ServiceConnectorRequestModel,
+    ServiceConnectorResourcesModel,
+    ServiceConnectorResponseModel,
+    ServiceConnectorTypeModel,
+    ServiceConnectorUpdateModel,
     StackFilterModel,
     StackRequestModel,
     StackResponseModel,
@@ -121,62 +166,93 @@ from zenml.models import (
     UserRoleAssignmentRequestModel,
     UserRoleAssignmentResponseModel,
     UserUpdateModel,
+    WorkspaceFilterModel,
+    WorkspaceRequestModel,
+    WorkspaceResponseModel,
+    WorkspaceUpdateModel,
 )
 from zenml.models.base_models import (
     BaseRequestModel,
     BaseResponseModel,
-    ProjectScopedRequestModel,
-    ProjectScopedResponseModel,
+    WorkspaceScopedRequestModel,
 )
 from zenml.models.page_model import Page
+from zenml.models.run_metadata_models import RunMetadataFilterModel
 from zenml.models.schedule_model import ScheduleFilterModel
 from zenml.models.server_models import ServerModel
 from zenml.models.team_models import TeamFilterModel, TeamUpdateModel
-from zenml.utils.analytics_utils import AnalyticsEvent, track
+from zenml.service_connectors.service_connector_registry import (
+    service_connector_registry,
+)
 from zenml.utils.networking_utils import (
     replace_localhost_with_internal_hostname,
 )
+from zenml.zen_server.exceptions import exception_from_response
 from zenml.zen_stores.base_zen_store import BaseZenStore
+from zenml.zen_stores.secrets_stores.rest_secrets_store import (
+    RestSecretsStoreConfiguration,
+)
 
 logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    from zenml.models import UserAuthModel
 
 # type alias for possible json payloads (the Anys are recursive Json instances)
 Json = Union[Dict[str, Any], List[Any], str, int, float, bool, None]
 
 AnyRequestModel = TypeVar("AnyRequestModel", bound=BaseRequestModel)
-AnyProjestRequestModel = TypeVar(
-    "AnyProjestRequestModel", bound=ProjectScopedRequestModel
-)
-
 AnyResponseModel = TypeVar("AnyResponseModel", bound=BaseResponseModel)
-AnyProjestResponseModel = TypeVar(
-    "AnyProjestResponseModel", bound=ProjectScopedResponseModel
-)
-
-DEFAULT_HTTP_TIMEOUT = 30
 
 
 class RestZenStoreConfiguration(StoreConfiguration):
     """REST ZenML store configuration.
 
     Attributes:
+        type: The type of the store.
+        secrets_store: The configuration of the secrets store to use.
+            This defaults to a REST secrets store that extends the REST ZenML
+            store.
         username: The username to use to connect to the Zen server.
         password: The password to use to connect to the Zen server.
         verify_ssl: Either a boolean, in which case it controls whether we
             verify the server's TLS certificate, or a string, in which case it
             must be a path to a CA bundle to use or the CA bundle value itself.
         http_timeout: The timeout to use for all requests.
+
     """
 
     type: StoreType = StoreType.REST
+
+    secrets_store: Optional[SecretsStoreConfiguration] = None
+
     username: Optional[str] = None
     password: Optional[str] = None
     api_token: Optional[str] = None
     verify_ssl: Union[bool, str] = True
     http_timeout: int = DEFAULT_HTTP_TIMEOUT
+
+    @validator("secrets_store")
+    def validate_secrets_store(
+        cls, secrets_store: Optional[SecretsStoreConfiguration]
+    ) -> SecretsStoreConfiguration:
+        """Ensures that the secrets store uses an associated REST secrets store.
+
+        Args:
+            secrets_store: The secrets store config to be validated.
+
+        Returns:
+            The validated secrets store config.
+
+        Raises:
+            ValueError: If the secrets store is not of type REST.
+        """
+        if secrets_store is None:
+            secrets_store = RestSecretsStoreConfiguration()
+        elif secrets_store.type != SecretsStoreType.REST:
+            raise ValueError(
+                "The secrets store associated with a REST zen store must be "
+                f"of type REST, but is of type {secrets_store.type}."
+            )
+
+        return secrets_store
 
     @root_validator
     def validate_credentials(cls, values: Dict[str, Any]) -> Dict[str, Any]:
@@ -381,11 +457,18 @@ class RestZenStore(BaseZenStore):
         body = self.get(INFO)
         return ServerModel.parse_obj(body)
 
+    def get_deployment_id(self) -> UUID:
+        """Get the ID of the deployment.
+
+        Returns:
+            The ID of the deployment.
+        """
+        return self.get_store_info().id
+
     # ------
     # Stacks
     # ------
 
-    @track(AnalyticsEvent.REGISTERED_STACK)
     def create_stack(self, stack: StackRequestModel) -> StackResponseModel:
         """Register a new stack.
 
@@ -395,7 +478,7 @@ class RestZenStore(BaseZenStore):
         Returns:
             The registered stack.
         """
-        return self._create_project_scoped_resource(
+        return self._create_workspace_scoped_resource(
             resource=stack,
             route=STACKS,
             response_model=StackResponseModel,
@@ -434,7 +517,6 @@ class RestZenStore(BaseZenStore):
             filter_model=stack_filter_model,
         )
 
-    @track(AnalyticsEvent.UPDATED_STACK)
     def update_stack(
         self, stack_id: UUID, stack_update: StackUpdateModel
     ) -> StackResponseModel:
@@ -454,7 +536,6 @@ class RestZenStore(BaseZenStore):
             response_model=StackResponseModel,
         )
 
-    @track(AnalyticsEvent.DELETED_STACK)
     def delete_stack(self, stack_id: UUID) -> None:
         """Delete a stack.
 
@@ -470,7 +551,6 @@ class RestZenStore(BaseZenStore):
     # Stack components
     # ----------------
 
-    @track(AnalyticsEvent.REGISTERED_STACK_COMPONENT)
     def create_stack_component(
         self,
         component: ComponentRequestModel,
@@ -483,7 +563,7 @@ class RestZenStore(BaseZenStore):
         Returns:
             The created stack component.
         """
-        return self._create_project_scoped_resource(
+        return self._create_workspace_scoped_resource(
             resource=component,
             route=STACK_COMPONENTS,
             response_model=ComponentResponseModel,
@@ -524,7 +604,6 @@ class RestZenStore(BaseZenStore):
             filter_model=component_filter_model,
         )
 
-    @track(AnalyticsEvent.UPDATED_STACK_COMPONENT)
     def update_stack_component(
         self,
         component_id: UUID,
@@ -546,7 +625,6 @@ class RestZenStore(BaseZenStore):
             response_model=ComponentResponseModel,
         )
 
-    @track(AnalyticsEvent.DELETED_STACK_COMPONENT)
     def delete_stack_component(self, component_id: UUID) -> None:
         """Delete a stack component.
 
@@ -562,7 +640,6 @@ class RestZenStore(BaseZenStore):
     # Stack component flavors
     # -----------------------
 
-    @track(AnalyticsEvent.CREATED_FLAVOR)
     def create_flavor(self, flavor: FlavorRequestModel) -> FlavorResponseModel:
         """Creates a new stack component flavor.
 
@@ -572,8 +649,27 @@ class RestZenStore(BaseZenStore):
         Returns:
             The newly created flavor.
         """
-        return self._create_project_scoped_resource(
+        return self._create_resource(
             resource=flavor,
+            route=FLAVORS,
+            response_model=FlavorResponseModel,
+        )
+
+    def update_flavor(
+        self, flavor_id: UUID, flavor_update: FlavorUpdateModel
+    ) -> FlavorResponseModel:
+        """Updates an existing user.
+
+        Args:
+            flavor_id: The id of the flavor to update.
+            flavor_update: The update to be applied to the flavor.
+
+        Returns:
+            The updated flavor.
+        """
+        return self._update_resource(
+            resource_id=flavor_id,
+            resource_update=flavor_update,
             route=FLAVORS,
             response_model=FlavorResponseModel,
         )
@@ -600,8 +696,7 @@ class RestZenStore(BaseZenStore):
 
         Args:
             flavor_filter_model: All filter parameters including pagination
-            params
-
+                params
 
         Returns:
             List of all the stack component flavors matching the given criteria.
@@ -612,7 +707,6 @@ class RestZenStore(BaseZenStore):
             filter_model=flavor_filter_model,
         )
 
-    @track(AnalyticsEvent.DELETED_FLAVOR)
     def delete_flavor(self, flavor_id: UUID) -> None:
         """Delete a stack component flavor.
 
@@ -628,7 +722,6 @@ class RestZenStore(BaseZenStore):
     # Users
     # -----
 
-    @track(AnalyticsEvent.CREATED_USER)
     def create_user(self, user: UserRequestModel) -> UserResponseModel:
         """Creates a new user.
 
@@ -673,24 +766,6 @@ class RestZenStore(BaseZenStore):
             body = self.get(CURRENT_USER)
             return UserResponseModel.parse_obj(body)
 
-    def get_auth_user(
-        self, user_name_or_id: Union[str, UUID]
-    ) -> "UserAuthModel":
-        """Gets the auth model to a specific user.
-
-        Args:
-            user_name_or_id: The name or ID of the user to get.
-
-        Raises:
-            NotImplementedError: This method is only available for the
-                SQLZenStore.
-        """
-        raise NotImplementedError(
-            "This method is only designed for use"
-            " by the server endpoints. It is not designed"
-            " to be called from the client side."
-        )
-
     def list_users(
         self, user_filter_model: UserFilterModel
     ) -> Page[UserResponseModel]:
@@ -709,7 +784,6 @@ class RestZenStore(BaseZenStore):
             filter_model=user_filter_model,
         )
 
-    @track(AnalyticsEvent.UPDATED_USER)
     def update_user(
         self, user_id: UUID, user_update: UserUpdateModel
     ) -> UserResponseModel:
@@ -729,7 +803,6 @@ class RestZenStore(BaseZenStore):
             response_model=UserResponseModel,
         )
 
-    @track(AnalyticsEvent.DELETED_USER)
     def delete_user(self, user_name_or_id: Union[str, UUID]) -> None:
         """Deletes a user.
 
@@ -745,7 +818,6 @@ class RestZenStore(BaseZenStore):
     # Teams
     # -----
 
-    @track(AnalyticsEvent.CREATED_TEAM)
     def create_team(self, team: TeamRequestModel) -> TeamResponseModel:
         """Creates a new team.
 
@@ -794,7 +866,6 @@ class RestZenStore(BaseZenStore):
             filter_model=team_filter_model,
         )
 
-    @track(AnalyticsEvent.UPDATED_TEAM)
     def update_team(
         self, team_id: UUID, team_update: TeamUpdateModel
     ) -> TeamResponseModel:
@@ -814,7 +885,6 @@ class RestZenStore(BaseZenStore):
             response_model=TeamResponseModel,
         )
 
-    @track(AnalyticsEvent.DELETED_TEAM)
     def delete_team(self, team_name_or_id: Union[str, UUID]) -> None:
         """Deletes a team.
 
@@ -830,7 +900,6 @@ class RestZenStore(BaseZenStore):
     # Roles
     # -----
 
-    @track(AnalyticsEvent.CREATED_ROLE)
     def create_role(self, role: RoleRequestModel) -> RoleResponseModel:
         """Creates a new role.
 
@@ -879,7 +948,6 @@ class RestZenStore(BaseZenStore):
             filter_model=role_filter_model,
         )
 
-    @track(AnalyticsEvent.UPDATED_ROLE)
     def update_role(
         self, role_id: UUID, role_update: RoleUpdateModel
     ) -> RoleResponseModel:
@@ -899,7 +967,6 @@ class RestZenStore(BaseZenStore):
             response_model=RoleResponseModel,
         )
 
-    @track(AnalyticsEvent.DELETED_ROLE)
     def delete_role(self, role_name_or_id: Union[str, UUID]) -> None:
         """Deletes a role.
 
@@ -942,7 +1009,7 @@ class RestZenStore(BaseZenStore):
             user_role_assignment_id: Name or ID of the role assignment to get.
 
         Returns:
-            The requested project.
+            The requested workspace.
         """
         return self._get_resource(
             resource_id=user_role_assignment_id,
@@ -972,7 +1039,7 @@ class RestZenStore(BaseZenStore):
             user_role_assignment: The role assignment to create.
 
         Returns:
-            The newly created project.
+            The newly created workspace.
         """
         return self._create_resource(
             resource=user_role_assignment,
@@ -1011,9 +1078,6 @@ class RestZenStore(BaseZenStore):
 
         Returns:
             The requested role assignment.
-
-        Raises:
-            KeyError: If no role assignment with the given ID exists.
         """
         return self._get_resource(
             resource_id=team_role_assignment_id,
@@ -1053,103 +1117,99 @@ class RestZenStore(BaseZenStore):
         )
 
     # --------
-    # Projects
+    # Workspaces
     # --------
 
-    @track(AnalyticsEvent.CREATED_PROJECT)
-    def create_project(
-        self, project: ProjectRequestModel
-    ) -> ProjectResponseModel:
-        """Creates a new project.
+    def create_workspace(
+        self, workspace: WorkspaceRequestModel
+    ) -> WorkspaceResponseModel:
+        """Creates a new workspace.
 
         Args:
-            project: The project to create.
+            workspace: The workspace to create.
 
         Returns:
-            The newly created project.
+            The newly created workspace.
         """
         return self._create_resource(
-            resource=project,
-            route=PROJECTS,
-            response_model=ProjectResponseModel,
+            resource=workspace,
+            route=WORKSPACES,
+            response_model=WorkspaceResponseModel,
         )
 
-    def get_project(
-        self, project_name_or_id: Union[UUID, str]
-    ) -> ProjectResponseModel:
-        """Get an existing project by name or ID.
+    def get_workspace(
+        self, workspace_name_or_id: Union[UUID, str]
+    ) -> WorkspaceResponseModel:
+        """Get an existing workspace by name or ID.
 
         Args:
-            project_name_or_id: Name or ID of the project to get.
+            workspace_name_or_id: Name or ID of the workspace to get.
 
         Returns:
-            The requested project.
+            The requested workspace.
         """
         return self._get_resource(
-            resource_id=project_name_or_id,
-            route=PROJECTS,
-            response_model=ProjectResponseModel,
+            resource_id=workspace_name_or_id,
+            route=WORKSPACES,
+            response_model=WorkspaceResponseModel,
         )
 
-    def list_projects(
-        self, project_filter_model: ProjectFilterModel
-    ) -> Page[ProjectResponseModel]:
-        """List all project matching the given filter criteria.
+    def list_workspaces(
+        self, workspace_filter_model: WorkspaceFilterModel
+    ) -> Page[WorkspaceResponseModel]:
+        """List all workspace matching the given filter criteria.
 
         Args:
-            project_filter_model: All filter parameters including pagination
+            workspace_filter_model: All filter parameters including pagination
                 params.
 
         Returns:
-            A list of all project matching the filter criteria.
+            A list of all workspace matching the filter criteria.
         """
         return self._list_paginated_resources(
-            route=PROJECTS,
-            response_model=ProjectResponseModel,
-            filter_model=project_filter_model,
+            route=WORKSPACES,
+            response_model=WorkspaceResponseModel,
+            filter_model=workspace_filter_model,
         )
 
-    @track(AnalyticsEvent.UPDATED_PROJECT)
-    def update_project(
-        self, project_id: UUID, project_update: ProjectUpdateModel
-    ) -> ProjectResponseModel:
-        """Update an existing project.
+    def update_workspace(
+        self, workspace_id: UUID, workspace_update: WorkspaceUpdateModel
+    ) -> WorkspaceResponseModel:
+        """Update an existing workspace.
 
         Args:
-            project_id: The ID of the project to be updated.
-            project_update: The update to be applied to the project.
+            workspace_id: The ID of the workspace to be updated.
+            workspace_update: The update to be applied to the workspace.
 
         Returns:
-            The updated project.
+            The updated workspace.
         """
         return self._update_resource(
-            resource_id=project_id,
-            resource_update=project_update,
-            route=PROJECTS,
-            response_model=ProjectResponseModel,
+            resource_id=workspace_id,
+            resource_update=workspace_update,
+            route=WORKSPACES,
+            response_model=WorkspaceResponseModel,
         )
 
-    @track(AnalyticsEvent.DELETED_PROJECT)
-    def delete_project(self, project_name_or_id: Union[str, UUID]) -> None:
-        """Deletes a project.
+    def delete_workspace(self, workspace_name_or_id: Union[str, UUID]) -> None:
+        """Deletes a workspace.
 
         Args:
-            project_name_or_id: Name or ID of the project to delete.
+            workspace_name_or_id: Name or ID of the workspace to delete.
         """
         self._delete_resource(
-            resource_id=project_name_or_id,
-            route=PROJECTS,
+            resource_id=workspace_name_or_id,
+            route=WORKSPACES,
         )
 
     # ---------
     # Pipelines
     # ---------
 
-    @track(AnalyticsEvent.CREATE_PIPELINE)
     def create_pipeline(
         self, pipeline: PipelineRequestModel
     ) -> PipelineResponseModel:
-        """Creates a new pipeline in a project.
+        """Creates a new pipeline in a workspace.
 
         Args:
             pipeline: The pipeline to create.
@@ -1157,7 +1217,7 @@ class RestZenStore(BaseZenStore):
         Returns:
             The newly created pipeline.
         """
-        return self._create_project_scoped_resource(
+        return self._create_workspace_scoped_resource(
             resource=pipeline,
             route=PIPELINES,
             response_model=PipelineResponseModel,
@@ -1196,7 +1256,6 @@ class RestZenStore(BaseZenStore):
             filter_model=pipeline_filter_model,
         )
 
-    @track(AnalyticsEvent.UPDATE_PIPELINE)
     def update_pipeline(
         self, pipeline_id: UUID, pipeline_update: PipelineUpdateModel
     ) -> PipelineResponseModel:
@@ -1216,7 +1275,6 @@ class RestZenStore(BaseZenStore):
             response_model=PipelineResponseModel,
         )
 
-    @track(AnalyticsEvent.DELETE_PIPELINE)
     def delete_pipeline(self, pipeline_id: UUID) -> None:
         """Deletes a pipeline.
 
@@ -1226,6 +1284,140 @@ class RestZenStore(BaseZenStore):
         self._delete_resource(
             resource_id=pipeline_id,
             route=PIPELINES,
+        )
+
+    # ---------
+    # Builds
+    # ---------
+
+    def create_build(
+        self,
+        build: PipelineBuildRequestModel,
+    ) -> PipelineBuildResponseModel:
+        """Creates a new build in a workspace.
+
+        Args:
+            build: The build to create.
+
+        Returns:
+            The newly created build.
+        """
+        return self._create_workspace_scoped_resource(
+            resource=build,
+            route=PIPELINE_BUILDS,
+            response_model=PipelineBuildResponseModel,
+        )
+
+    def get_build(self, build_id: UUID) -> PipelineBuildResponseModel:
+        """Get a build with a given ID.
+
+        Args:
+            build_id: ID of the build.
+
+        Returns:
+            The build.
+        """
+        return self._get_resource(
+            resource_id=build_id,
+            route=PIPELINE_BUILDS,
+            response_model=PipelineBuildResponseModel,
+        )
+
+    def list_builds(
+        self, build_filter_model: PipelineBuildFilterModel
+    ) -> Page[PipelineBuildResponseModel]:
+        """List all builds matching the given filter criteria.
+
+        Args:
+            build_filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all builds matching the filter criteria.
+        """
+        return self._list_paginated_resources(
+            route=PIPELINE_BUILDS,
+            response_model=PipelineBuildResponseModel,
+            filter_model=build_filter_model,
+        )
+
+    def delete_build(self, build_id: UUID) -> None:
+        """Deletes a build.
+
+        Args:
+            build_id: The ID of the build to delete.
+        """
+        self._delete_resource(
+            resource_id=build_id,
+            route=PIPELINE_BUILDS,
+        )
+
+    # ----------------------
+    # Pipeline Deployments
+    # ----------------------
+
+    def create_deployment(
+        self,
+        deployment: PipelineDeploymentRequestModel,
+    ) -> PipelineDeploymentResponseModel:
+        """Creates a new deployment in a workspace.
+
+        Args:
+            deployment: The deployment to create.
+
+        Returns:
+            The newly created deployment.
+        """
+        return self._create_workspace_scoped_resource(
+            resource=deployment,
+            route=PIPELINE_DEPLOYMENTS,
+            response_model=PipelineDeploymentResponseModel,
+        )
+
+    def get_deployment(
+        self, deployment_id: UUID
+    ) -> PipelineDeploymentResponseModel:
+        """Get a deployment with a given ID.
+
+        Args:
+            deployment_id: ID of the deployment.
+
+        Returns:
+            The deployment.
+        """
+        return self._get_resource(
+            resource_id=deployment_id,
+            route=PIPELINE_DEPLOYMENTS,
+            response_model=PipelineDeploymentResponseModel,
+        )
+
+    def list_deployments(
+        self, deployment_filter_model: PipelineDeploymentFilterModel
+    ) -> Page[PipelineDeploymentResponseModel]:
+        """List all deployments matching the given filter criteria.
+
+        Args:
+            deployment_filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all deployments matching the filter criteria.
+        """
+        return self._list_paginated_resources(
+            route=PIPELINE_DEPLOYMENTS,
+            response_model=PipelineDeploymentResponseModel,
+            filter_model=deployment_filter_model,
+        )
+
+    def delete_deployment(self, deployment_id: UUID) -> None:
+        """Deletes a deployment.
+
+        Args:
+            deployment_id: The ID of the deployment to delete.
+        """
+        self._delete_resource(
+            resource_id=deployment_id,
+            route=PIPELINE_DEPLOYMENTS,
         )
 
     # ---------
@@ -1243,7 +1435,7 @@ class RestZenStore(BaseZenStore):
         Returns:
             The newly created schedule.
         """
-        return self._create_project_scoped_resource(
+        return self._create_workspace_scoped_resource(
             resource=schedule,
             route=SCHEDULES,
             response_model=ScheduleResponseModel,
@@ -1267,7 +1459,7 @@ class RestZenStore(BaseZenStore):
     def list_schedules(
         self, schedule_filter_model: ScheduleFilterModel
     ) -> Page[ScheduleResponseModel]:
-        """List all schedules in the project.
+        """List all schedules in the workspace.
 
         Args:
             schedule_filter_model: All filter parameters including pagination
@@ -1329,7 +1521,7 @@ class RestZenStore(BaseZenStore):
         Returns:
             The created pipeline run.
         """
-        return self._create_project_scoped_resource(
+        return self._create_workspace_scoped_resource(
             resource=pipeline_run,
             response_model=PipelineRunResponseModel,
             route=RUNS,
@@ -1354,7 +1546,7 @@ class RestZenStore(BaseZenStore):
 
     def get_or_create_run(
         self, pipeline_run: PipelineRunRequestModel
-    ) -> PipelineRunResponseModel:
+    ) -> Tuple[PipelineRunResponseModel, bool]:
         """Gets or creates a pipeline run.
 
         If a run with the same ID or name already exists, it is returned.
@@ -1364,13 +1556,13 @@ class RestZenStore(BaseZenStore):
             pipeline_run: The pipeline run to get or create.
 
         Returns:
-            The pipeline run.
+            The pipeline run, and a boolean indicating whether the run was
+            created or not.
         """
-        return self._create_project_scoped_resource(
+        return self._get_or_create_workspace_scoped_resource(
             resource=pipeline_run,
             route=RUNS,
             response_model=PipelineRunResponseModel,
-            params={"get_if_exists": True},
         )
 
     def list_runs(
@@ -1559,6 +1751,975 @@ class RestZenStore(BaseZenStore):
         """
         self._delete_resource(resource_id=artifact_id, route=ARTIFACTS)
 
+    # ------------
+    # Run Metadata
+    # ------------
+
+    def create_run_metadata(
+        self, run_metadata: RunMetadataRequestModel
+    ) -> List[RunMetadataResponseModel]:
+        """Creates run metadata.
+
+        Args:
+            run_metadata: The run metadata to create.
+
+        Returns:
+            The created run metadata.
+        """
+        route = f"{WORKSPACES}/{str(run_metadata.workspace)}{RUN_METADATA}"
+        response_body = self.post(f"{route}", body=run_metadata)
+        result: List[RunMetadataResponseModel] = []
+        if isinstance(response_body, list):
+            for metadata in response_body or []:
+                result.append(RunMetadataResponseModel.parse_obj(metadata))
+        return result
+
+    def list_run_metadata(
+        self,
+        run_metadata_filter_model: RunMetadataFilterModel,
+    ) -> Page[RunMetadataResponseModel]:
+        """List run metadata.
+
+        Args:
+            run_metadata_filter_model: All filter parameters including
+                pagination params.
+
+        Returns:
+            The run metadata.
+        """
+        return self._list_paginated_resources(
+            route=RUN_METADATA,
+            response_model=RunMetadataResponseModel,
+            filter_model=run_metadata_filter_model,
+        )
+
+    # -----------------
+    # Code Repositories
+    # -----------------
+
+    def create_code_repository(
+        self, code_repository: CodeRepositoryRequestModel
+    ) -> CodeRepositoryResponseModel:
+        """Creates a new code repository.
+
+        Args:
+            code_repository: Code repository to be created.
+
+        Returns:
+            The newly created code repository.
+        """
+        return self._create_workspace_scoped_resource(
+            resource=code_repository,
+            response_model=CodeRepositoryResponseModel,
+            route=CODE_REPOSITORIES,
+        )
+
+    def get_code_repository(
+        self, code_repository_id: UUID
+    ) -> CodeRepositoryResponseModel:
+        """Gets a specific code repository.
+
+        Args:
+            code_repository_id: The ID of the code repository to get.
+
+        Returns:
+            The requested code repository, if it was found.
+        """
+        return self._get_resource(
+            resource_id=code_repository_id,
+            route=CODE_REPOSITORIES,
+            response_model=CodeRepositoryResponseModel,
+        )
+
+    def list_code_repositories(
+        self, filter_model: CodeRepositoryFilterModel
+    ) -> Page[CodeRepositoryResponseModel]:
+        """List all code repositories.
+
+        Args:
+            filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all code repositories.
+        """
+        return self._list_paginated_resources(
+            route=CODE_REPOSITORIES,
+            response_model=CodeRepositoryResponseModel,
+            filter_model=filter_model,
+        )
+
+    def update_code_repository(
+        self, code_repository_id: UUID, update: CodeRepositoryUpdateModel
+    ) -> CodeRepositoryResponseModel:
+        """Updates an existing code repository.
+
+        Args:
+            code_repository_id: The ID of the code repository to update.
+            update: The update to be applied to the code repository.
+
+        Returns:
+            The updated code repository.
+        """
+        return self._update_resource(
+            resource_id=code_repository_id,
+            resource_update=update,
+            response_model=CodeRepositoryResponseModel,
+            route=CODE_REPOSITORIES,
+        )
+
+    def delete_code_repository(self, code_repository_id: UUID) -> None:
+        """Deletes a code repository.
+
+        Args:
+            code_repository_id: The ID of the code repository to delete.
+        """
+        self._delete_resource(
+            resource_id=code_repository_id, route=CODE_REPOSITORIES
+        )
+
+    # ------------------
+    # Service Connectors
+    # ------------------
+
+    def _populate_connector_type(
+        self,
+        *connector_models: Union[
+            ServiceConnectorResponseModel, ServiceConnectorResourcesModel
+        ],
+    ) -> None:
+        """Populates or updates the connector type of the given connector or resource models.
+
+        If the connector type is not locally available, the connector type
+        field is left as is. The local and remote flags of the connector type
+        are updated accordingly.
+
+        Args:
+            connector_models: The service connector or resource models to
+                populate.
+        """
+        for service_connector in connector_models:
+            # Mark the remote connector type as being only remotely available
+            if not isinstance(service_connector.connector_type, str):
+                service_connector.connector_type.local = False
+                service_connector.connector_type.remote = True
+
+            if not service_connector_registry.is_registered(
+                service_connector.type
+            ):
+                continue
+
+            connector_type = (
+                service_connector_registry.get_service_connector_type(
+                    service_connector.type
+                )
+            )
+            connector_type.local = True
+            if not isinstance(service_connector.connector_type, str):
+                connector_type.remote = True
+            service_connector.connector_type = connector_type
+
+    def create_service_connector(
+        self, service_connector: ServiceConnectorRequestModel
+    ) -> ServiceConnectorResponseModel:
+        """Creates a new service connector.
+
+        Args:
+            service_connector: Service connector to be created.
+
+        Returns:
+            The newly created service connector.
+        """
+        connector_model = self._create_workspace_scoped_resource(
+            resource=service_connector,
+            route=SERVICE_CONNECTORS,
+            response_model=ServiceConnectorResponseModel,
+        )
+        self._populate_connector_type(connector_model)
+        return connector_model
+
+    def get_service_connector(
+        self, service_connector_id: UUID
+    ) -> ServiceConnectorResponseModel:
+        """Gets a specific service connector.
+
+        Args:
+            service_connector_id: The ID of the service connector to get.
+
+        Returns:
+            The requested service connector, if it was found.
+        """
+        connector_model = self._get_resource(
+            resource_id=service_connector_id,
+            route=SERVICE_CONNECTORS,
+            response_model=ServiceConnectorResponseModel,
+            params={"expand_secrets": False},
+        )
+        self._populate_connector_type(connector_model)
+        return connector_model
+
+    def list_service_connectors(
+        self, filter_model: ServiceConnectorFilterModel
+    ) -> Page[ServiceConnectorResponseModel]:
+        """List all service connectors.
+
+        Args:
+            filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all service connectors.
+        """
+        connector_models = self._list_paginated_resources(
+            route=SERVICE_CONNECTORS,
+            response_model=ServiceConnectorResponseModel,
+            filter_model=filter_model,
+            params={"expand_secrets": False},
+        )
+        self._populate_connector_type(*connector_models.items)
+        return connector_models
+
+    def update_service_connector(
+        self, service_connector_id: UUID, update: ServiceConnectorUpdateModel
+    ) -> ServiceConnectorResponseModel:
+        """Updates an existing service connector.
+
+        The update model contains the fields to be updated. If a field value is
+        set to None in the model, the field is not updated, but there are
+        special rules concerning some fields:
+
+        * the `configuration` and `secrets` fields together represent a full
+        valid configuration update, not just a partial update. If either is
+        set (i.e. not None) in the update, their values are merged together and
+        will replace the existing configuration and secrets values.
+        * the `resource_id` field value is also a full replacement value: if set
+        to `None`, the resource ID is removed from the service connector.
+        * the `expiration_seconds` field value is also a full replacement value:
+        if set to `None`, the expiration is removed from the service connector.
+        * the `secret_id` field value in the update is ignored, given that
+        secrets are managed internally by the ZenML store.
+        * the `labels` field is also a full labels update: if set (i.e. not
+        `None`), all existing labels are removed and replaced by the new labels
+        in the update.
+
+        Args:
+            service_connector_id: The ID of the service connector to update.
+            update: The update to be applied to the service connector.
+
+        Returns:
+            The updated service connector.
+        """
+        connector_model = self._update_resource(
+            resource_id=service_connector_id,
+            resource_update=update,
+            response_model=ServiceConnectorResponseModel,
+            route=SERVICE_CONNECTORS,
+        )
+        self._populate_connector_type(connector_model)
+        return connector_model
+
+    def delete_service_connector(self, service_connector_id: UUID) -> None:
+        """Deletes a service connector.
+
+        Args:
+            service_connector_id: The ID of the service connector to delete.
+        """
+        self._delete_resource(
+            resource_id=service_connector_id, route=SERVICE_CONNECTORS
+        )
+
+    def verify_service_connector_config(
+        self,
+        service_connector: ServiceConnectorRequestModel,
+        list_resources: bool = True,
+    ) -> ServiceConnectorResourcesModel:
+        """Verifies if a service connector configuration has access to resources.
+
+        Args:
+            service_connector: The service connector configuration to verify.
+            list_resources: If True, the list of all resources accessible
+                through the service connector and matching the supplied resource
+                type and ID are returned.
+
+        Returns:
+            The list of resources that the service connector configuration has
+            access to.
+        """
+        response_body = self.post(
+            f"{SERVICE_CONNECTORS}{SERVICE_CONNECTOR_VERIFY}",
+            body=service_connector,
+            params={"list_resources": list_resources},
+        )
+
+        resources = ServiceConnectorResourcesModel.parse_obj(response_body)
+        self._populate_connector_type(resources)
+        return resources
+
+    def verify_service_connector(
+        self,
+        service_connector_id: UUID,
+        resource_type: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        list_resources: bool = True,
+    ) -> ServiceConnectorResourcesModel:
+        """Verifies if a service connector instance has access to one or more resources.
+
+        Args:
+            service_connector_id: The ID of the service connector to verify.
+            resource_type: The type of resource to verify access to.
+            resource_id: The ID of the resource to verify access to.
+            list_resources: If True, the list of all resources accessible
+                through the service connector and matching the supplied resource
+                type and ID are returned.
+
+        Returns:
+            The list of resources that the service connector has access to,
+            scoped to the supplied resource type and ID, if provided.
+        """
+        params: Dict[str, Any] = {"list_resources": list_resources}
+        if resource_type:
+            params["resource_type"] = resource_type
+        if resource_id:
+            params["resource_id"] = resource_id
+        response_body = self.put(
+            f"{SERVICE_CONNECTORS}/{str(service_connector_id)}{SERVICE_CONNECTOR_VERIFY}",
+            params=params,
+        )
+
+        resources = ServiceConnectorResourcesModel.parse_obj(response_body)
+        self._populate_connector_type(resources)
+        return resources
+
+    def get_service_connector_client(
+        self,
+        service_connector_id: UUID,
+        resource_type: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ) -> ServiceConnectorResponseModel:
+        """Get a service connector client for a service connector and given resource.
+
+        Args:
+            service_connector_id: The ID of the base service connector to use.
+            resource_type: The type of resource to get a client for.
+            resource_id: The ID of the resource to get a client for.
+
+        Returns:
+            A service connector client that can be used to access the given
+            resource.
+        """
+        params = {}
+        if resource_type:
+            params["resource_type"] = resource_type
+        if resource_id:
+            params["resource_id"] = resource_id
+        response_body = self.get(
+            f"{SERVICE_CONNECTORS}/{str(service_connector_id)}{SERVICE_CONNECTOR_CLIENT}",
+            params=params,
+        )
+
+        connector = ServiceConnectorResponseModel.parse_obj(response_body)
+        self._populate_connector_type(connector)
+        return connector
+
+    def list_service_connector_resources(
+        self,
+        user_name_or_id: Union[str, UUID],
+        workspace_name_or_id: Union[str, UUID],
+        connector_type: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ) -> List[ServiceConnectorResourcesModel]:
+        """List resources that can be accessed by service connectors.
+
+        Args:
+            user_name_or_id: The name or ID of the user to scope to.
+            workspace_name_or_id: The name or ID of the workspace to scope to.
+            connector_type: The type of service connector to scope to.
+            resource_type: The type of resource to scope to.
+            resource_id: The ID of the resource to scope to.
+
+        Returns:
+            The matching list of resources that available service
+            connectors have access to.
+        """
+        params = {}
+        if connector_type:
+            params["connector_type"] = connector_type
+        if resource_type:
+            params["resource_type"] = resource_type
+        if resource_id:
+            params["resource_id"] = resource_id
+        response_body = self.get(
+            f"{WORKSPACES}/{workspace_name_or_id}{SERVICE_CONNECTORS}{SERVICE_CONNECTOR_RESOURCES}",
+            params=params,
+        )
+
+        assert isinstance(response_body, list)
+        resource_list = [
+            ServiceConnectorResourcesModel.parse_obj(item)
+            for item in response_body
+        ]
+
+        self._populate_connector_type(*resource_list)
+
+        # For service connectors with types that are only locally available,
+        # we need to retrieve the resource list locally
+        for idx, resources in enumerate(resource_list):
+            if isinstance(resources.connector_type, str):
+                # Skip connector types that are neither locally nor remotely
+                # available
+                continue
+            if resources.connector_type.remote:
+                # Skip connector types that are remotely available
+                continue
+
+            # Retrieve the resource list locally
+            assert resources.id is not None
+            connector = self.get_service_connector(resources.id)
+            connector_instance = (
+                service_connector_registry.instantiate_connector(
+                    model=connector
+                )
+            )
+
+            try:
+                local_resources = connector_instance.verify(
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                )
+            except (ValueError, AuthorizationException) as e:
+                logger.error(
+                    f'Failed to fetch {resource_type or "available"} '
+                    f"resources from service connector {connector.name}/"
+                    f"{connector.id}: {e}"
+                )
+                continue
+
+            resource_list[idx] = local_resources
+
+        return resource_list
+
+    def list_service_connector_types(
+        self,
+        connector_type: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        auth_method: Optional[str] = None,
+    ) -> List[ServiceConnectorTypeModel]:
+        """Get a list of service connector types.
+
+        Args:
+            connector_type: Filter by connector type.
+            resource_type: Filter by resource type.
+            auth_method: Filter by authentication method.
+
+        Returns:
+            List of service connector types.
+        """
+        params = {}
+        if connector_type:
+            params["connector_type"] = connector_type
+        if resource_type:
+            params["resource_type"] = resource_type
+        if auth_method:
+            params["auth_method"] = auth_method
+        response_body = self.get(
+            SERVICE_CONNECTOR_TYPES,
+            params=params,
+        )
+
+        assert isinstance(response_body, list)
+        remote_connector_types = [
+            ServiceConnectorTypeModel.parse_obj(item) for item in response_body
+        ]
+
+        # Mark the remote connector types as being only remotely available
+        for c in remote_connector_types:
+            c.local = False
+            c.remote = True
+
+        local_connector_types = (
+            service_connector_registry.list_service_connector_types(
+                connector_type=connector_type,
+                resource_type=resource_type,
+                auth_method=auth_method,
+            )
+        )
+
+        # Add the connector types in the local registry to the list of
+        # connector types available remotely. Overwrite those that have
+        # the same connector type but mark them as being remotely available.
+        connector_types_map = {
+            connector_type.connector_type: connector_type
+            for connector_type in remote_connector_types
+        }
+
+        for connector in local_connector_types:
+            if connector.connector_type in connector_types_map:
+                connector.remote = True
+            connector_types_map[connector.connector_type] = connector
+
+        return list(connector_types_map.values())
+
+    def get_service_connector_type(
+        self,
+        connector_type: str,
+    ) -> ServiceConnectorTypeModel:
+        """Returns the requested service connector type.
+
+        Args:
+            connector_type: the service connector type identifier.
+
+        Returns:
+            The requested service connector type.
+        """
+        # Use the local registry to get the service connector type, if it
+        # exists.
+        local_connector_type: Optional[ServiceConnectorTypeModel] = None
+        if service_connector_registry.is_registered(connector_type):
+            local_connector_type = (
+                service_connector_registry.get_service_connector_type(
+                    connector_type
+                )
+            )
+        try:
+            response_body = self.get(
+                f"{SERVICE_CONNECTOR_TYPES}/{connector_type}",
+            )
+            remote_connector_type = ServiceConnectorTypeModel.parse_obj(
+                response_body
+            )
+            if local_connector_type:
+                # If locally available, return the local connector type but
+                # mark it as being remotely available.
+                local_connector_type.remote = True
+                return local_connector_type
+
+            # Mark the remote connector type as being only remotely available
+            remote_connector_type.local = False
+            remote_connector_type.remote = True
+
+            return remote_connector_type
+        except KeyError:
+            # If the service connector type is not found, check the local
+            # registry.
+            return service_connector_registry.get_service_connector_type(
+                connector_type
+            )
+
+    #########
+    # Model
+    #########
+
+    def create_model(self, model: ModelRequestModel) -> ModelResponseModel:
+        """Creates a new model.
+
+        Args:
+            model: the Model to be created.
+
+        Returns:
+            The newly created model.
+        """
+        return self._create_workspace_scoped_resource(
+            resource=model,
+            response_model=ModelResponseModel,
+            route=MODELS,
+        )
+
+    def delete_model(self, model_name_or_id: Union[str, UUID]) -> None:
+        """Deletes a model.
+
+        Args:
+            model_name_or_id: name or id of the model to be deleted.
+        """
+        self._delete_resource(resource_id=model_name_or_id, route=MODELS)
+
+    def update_model(
+        self,
+        model_id: UUID,
+        model_update: ModelUpdateModel,
+    ) -> ModelResponseModel:
+        """Updates an existing model.
+
+        Args:
+            model_id: UUID of the model to be updated.
+            model_update: the Model to be updated.
+
+        Returns:
+            The updated model.
+        """
+        return self._update_resource(
+            resource_id=model_id,
+            resource_update=model_update,
+            route=MODELS,
+            response_model=ModelResponseModel,
+        )
+
+    def get_model(
+        self, model_name_or_id: Union[str, UUID]
+    ) -> ModelResponseModel:
+        """Get an existing model.
+
+        Args:
+            model_name_or_id: name or id of the model to be retrieved.
+
+        Returns:
+            The model of interest.
+        """
+        return self._get_resource(
+            resource_id=model_name_or_id,
+            route=MODELS,
+            response_model=ModelResponseModel,
+        )
+
+    def list_models(
+        self,
+        model_filter_model: ModelFilterModel,
+    ) -> Page[ModelResponseModel]:
+        """Get all models by filter.
+
+        Args:
+            model_filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all models.
+        """
+        return self._list_paginated_resources(
+            route=MODELS,
+            response_model=ModelResponseModel,
+            filter_model=model_filter_model,
+        )
+
+    #################
+    # Model Versions
+    #################
+
+    def create_model_version(
+        self, model_version: ModelVersionRequestModel
+    ) -> ModelVersionResponseModel:
+        """Creates a new model version.
+
+        Args:
+            model_version: the Model Version to be created.
+
+        Returns:
+            The newly created model version.
+        """
+        return self._create_workspace_scoped_resource(
+            resource=model_version,
+            response_model=ModelVersionResponseModel,
+            route=f"{MODELS}/{model_version.model}{MODEL_VERSIONS}",
+        )
+
+    def delete_model_version(
+        self,
+        model_name_or_id: Union[str, UUID],
+        model_version_name_or_id: Union[str, UUID],
+    ) -> None:
+        """Deletes a model version.
+
+        Args:
+            model_name_or_id: name or id of the model containing the model version.
+            model_version_name_or_id: name or id of the model version to be deleted.
+        """
+        self._delete_resource(
+            resource_id=model_version_name_or_id,
+            route=f"{MODELS}/{model_name_or_id}{MODEL_VERSIONS}",
+        )
+
+    def get_model_version(
+        self,
+        model_name_or_id: Union[str, UUID],
+        model_version_name_or_number_or_id: Optional[
+            Union[str, int, UUID, ModelStages]
+        ] = None,
+    ) -> ModelVersionResponseModel:
+        """Get an existing model version.
+
+        Args:
+            model_name_or_id: name or id of the model containing the model version.
+            model_version_name_or_number_or_id: name, id, stage or number of the model version to be retrieved.
+                If skipped latest version will be retrieved.
+
+        Returns:
+            The model version of interest.
+        """
+        return self._get_resource(
+            resource_id=model_version_name_or_number_or_id
+            or LATEST_MODEL_VERSION_PLACEHOLDER,
+            route=f"{MODELS}/{model_name_or_id}{MODEL_VERSIONS}",
+            response_model=ModelVersionResponseModel,
+            params={
+                "is_number": isinstance(
+                    model_version_name_or_number_or_id, int
+                )
+            },
+        )
+
+    def list_model_versions(
+        self,
+        model_version_filter_model: ModelVersionFilterModel,
+    ) -> Page[ModelVersionResponseModel]:
+        """Get all model versions by filter.
+
+        Args:
+            model_version_filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all model versions.
+        """
+        return self._list_paginated_resources(
+            route=f"{MODELS}/{model_version_filter_model.model_id}{MODEL_VERSIONS}",
+            response_model=ModelVersionResponseModel,
+            filter_model=model_version_filter_model,
+        )
+
+    def update_model_version(
+        self,
+        model_version_id: UUID,
+        model_version_update_model: ModelVersionUpdateModel,
+    ) -> ModelVersionResponseModel:
+        """Get all model versions by filter.
+
+        Args:
+            model_version_id: The ID of model version to be updated.
+            model_version_update_model: The model version to be updated.
+
+        Returns:
+            An updated model version.
+
+        """
+        return self._update_resource(
+            resource_id=model_version_id,
+            resource_update=model_version_update_model,
+            route=f"{MODELS}/{model_version_update_model.model}{MODEL_VERSIONS}",
+            response_model=ModelVersionResponseModel,
+        )
+
+    ###########################
+    # Model Versions Artifacts
+    ###########################
+
+    def create_model_version_artifact_link(
+        self, model_version_artifact_link: ModelVersionArtifactRequestModel
+    ) -> ModelVersionArtifactResponseModel:
+        """Creates a new model version link.
+
+        Args:
+            model_version_artifact_link: the Model Version to Artifact Link to be created.
+
+        Returns:
+            The newly created model version to artifact link.
+        """
+        return self._create_workspace_scoped_resource(
+            resource=model_version_artifact_link,
+            response_model=ModelVersionArtifactResponseModel,
+            route=f"{MODELS}/{model_version_artifact_link.model}{MODEL_VERSIONS}/{model_version_artifact_link.model_version}{ARTIFACTS}",
+        )
+
+    def list_model_version_artifact_links(
+        self,
+        model_version_artifact_link_filter_model: ModelVersionArtifactFilterModel,
+    ) -> Page[ModelVersionArtifactResponseModel]:
+        """Get all model version to artifact links by filter.
+
+        Args:
+            model_version_artifact_link_filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all model version to artifact links.
+        """
+        return self._list_paginated_resources(
+            route=f"{MODELS}/{model_version_artifact_link_filter_model.model_id}{MODEL_VERSIONS}/{model_version_artifact_link_filter_model.model_version_id}{ARTIFACTS}",
+            response_model=ModelVersionArtifactResponseModel,
+            filter_model=model_version_artifact_link_filter_model,
+        )
+
+    def delete_model_version_artifact_link(
+        self,
+        model_name_or_id: Union[str, UUID],
+        model_version_name_or_id: Union[str, UUID],
+        model_version_artifact_link_name_or_id: Union[str, UUID],
+    ) -> None:
+        """Deletes a model version to artifact link.
+
+        Args:
+            model_name_or_id: name or ID of the model containing the model version.
+            model_version_name_or_id: name or ID of the model version containing the link.
+            model_version_artifact_link_name_or_id: name or ID of the model version to artifact link to be deleted.
+        """
+        self._delete_resource(
+            resource_id=model_version_artifact_link_name_or_id,
+            route=f"{MODELS}/{model_name_or_id}{MODEL_VERSIONS}/{model_version_name_or_id}{ARTIFACTS}",
+        )
+
+    ###############################
+    # Model Versions Pipeline Runs
+    ###############################
+
+    def create_model_version_pipeline_run_link(
+        self,
+        model_version_pipeline_run_link: ModelVersionPipelineRunRequestModel,
+    ) -> ModelVersionPipelineRunResponseModel:
+        """Creates a new model version to pipeline run link.
+
+        Args:
+            model_version_pipeline_run_link: the Model Version to Pipeline Run Link to be created.
+
+        Returns:
+            - If Model Version to Pipeline Run Link already exists - returns the existing link.
+            - Otherwise, returns the newly created model version to pipeline run link.
+        """
+        return self._create_workspace_scoped_resource(
+            resource=model_version_pipeline_run_link,
+            response_model=ModelVersionPipelineRunResponseModel,
+            route=f"{MODELS}/{model_version_pipeline_run_link.model}{MODEL_VERSIONS}/{model_version_pipeline_run_link.model_version}{RUNS}",
+        )
+
+    def list_model_version_pipeline_run_links(
+        self,
+        model_version_pipeline_run_link_filter_model: ModelVersionPipelineRunFilterModel,
+    ) -> Page[ModelVersionPipelineRunResponseModel]:
+        """Get all model version to pipeline run links by filter.
+
+        Args:
+            model_version_pipeline_run_link_filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all model version to pipeline run links.
+        """
+        return self._list_paginated_resources(
+            route=f"{MODELS}/{model_version_pipeline_run_link_filter_model.model_id}{MODEL_VERSIONS}/{model_version_pipeline_run_link_filter_model.model_version_id}{RUNS}",
+            response_model=ModelVersionPipelineRunResponseModel,
+            filter_model=model_version_pipeline_run_link_filter_model,
+        )
+
+    def delete_model_version_pipeline_run_link(
+        self,
+        model_name_or_id: Union[str, UUID],
+        model_version_name_or_id: Union[str, UUID],
+        model_version_pipeline_run_link_name_or_id: Union[str, UUID],
+    ) -> None:
+        """Deletes a model version to pipeline run link.
+
+        Args:
+            model_name_or_id: name or ID of the model containing the model version.
+            model_version_name_or_id: name or ID of the model version containing the link.
+            model_version_pipeline_run_link_name_or_id: name or ID of the model version to pipeline run link to be deleted.
+        """
+        self._delete_resource(
+            resource_id=model_version_pipeline_run_link_name_or_id,
+            route=f"{MODELS}/{model_name_or_id}{MODEL_VERSIONS}/{model_version_name_or_id}{RUNS}",
+        )
+
+    # ------------------
+    # Authorized Devices
+    # ------------------
+
+    def get_authorized_device(
+        self, device_id: UUID
+    ) -> OAuthDeviceResponseModel:
+        """Gets a specific OAuth 2.0 authorized device.
+
+        Args:
+            device_id: The ID of the device to get.
+
+        Returns:
+            The requested device, if it was found.
+        """
+        return self._get_resource(
+            resource_id=device_id,
+            route=DEVICES,
+            response_model=OAuthDeviceResponseModel,
+        )
+
+    def list_authorized_devices(
+        self, filter_model: OAuthDeviceFilterModel
+    ) -> Page[OAuthDeviceResponseModel]:
+        """List all OAuth 2.0 authorized devices for a user.
+
+        Args:
+            filter_model: All filter parameters including pagination
+                params.
+
+        Returns:
+            A page of all matching OAuth 2.0 authorized devices.
+        """
+        return self._list_paginated_resources(
+            route=DEVICES,
+            response_model=OAuthDeviceResponseModel,
+            filter_model=filter_model,
+        )
+
+    def update_authorized_device(
+        self, device_id: UUID, update: OAuthDeviceUpdateModel
+    ) -> OAuthDeviceResponseModel:
+        """Updates an existing OAuth 2.0 authorized device for internal use.
+
+        Args:
+            device_id: The ID of the device to update.
+            update: The update to be applied to the device.
+
+        Returns:
+            The updated OAuth 2.0 authorized device.
+        """
+        return self._update_resource(
+            resource_id=device_id,
+            resource_update=update,
+            response_model=OAuthDeviceResponseModel,
+            route=DEVICES,
+        )
+
+    def delete_authorized_device(self, device_id: UUID) -> None:
+        """Deletes an OAuth 2.0 authorized device.
+
+        Args:
+            device_id: The ID of the device to delete.
+        """
+        self._delete_resource(resource_id=device_id, route=DEVICES)
+
+    # -------------------
+    # Pipeline API Tokens
+    # -------------------
+
+    def get_api_token(
+        self,
+        pipeline_id: Optional[UUID] = None,
+        schedule_id: Optional[UUID] = None,
+        expires_minutes: Optional[int] = None,
+    ) -> str:
+        """Get an API token for a workload.
+
+        Args:
+            pipeline_id: The ID of the pipeline to get a token for.
+            schedule_id: The ID of the schedule to get a token for.
+            expires_minutes: The number of minutes for which the token should
+                be valid. If not provided, the token will be valid indefinitely.
+
+        Returns:
+            The API token.
+
+        Raises:
+            ValueError: if the server response is not valid.
+        """
+        params: Dict[str, Any] = {}
+        if pipeline_id:
+            params["pipeline_id"] = pipeline_id
+        if schedule_id:
+            params["schedule_id"] = schedule_id
+        if expires_minutes:
+            params["expires_minutes"] = expires_minutes
+        response_body = self.get(API_TOKEN, params=params)
+        if not isinstance(response_body, str):
+            raise ValueError(
+                f"Bad API Response. Expected API token, got "
+                f"{type(response_body)}"
+            )
+        return response_body
+
     # =======================
     # Internal helper methods
     # =======================
@@ -1631,6 +2792,18 @@ class RestZenStore(BaseZenStore):
             logger.debug("Authenticated to ZenML server.")
         return self._session
 
+    def clear_session(self) -> None:
+        """Clear the authentication session and any cached API tokens."""
+        self._session = None
+        self._api_token = None
+        # Clear the configured API token only if it's possible to fetch a new
+        # one from the server using other credentials (username/password).
+        if (
+            self.config.username is not None
+            and self.config.password is not None
+        ):
+            self.config.api_token = None
+
     @staticmethod
     def _handle_response(response: requests.Response) -> Json:
         """Handle API response, translating http status codes to Exception.
@@ -1642,24 +2815,11 @@ class RestZenStore(BaseZenStore):
             The parsed response.
 
         Raises:
-            DoesNotExistException: If the response indicates that the
-                requested entity does not exist.
-            EntityExistsError: If the response indicates that the requested
-                entity already exists.
-            AuthorizationException: If the response indicates that the request
-                is not authorized.
-            IllegalOperationError: If the response indicates that the requested
-                operation is forbidden.
-            KeyError: If the response indicates that the requested entity
-                does not exist.
-            RuntimeError: If the response indicates that the requested entity
-                does not exist.
-            StackComponentExistsError: If the response indicates that the
-                requested entity already exists.
-            StackExistsError: If the response indicates that the requested
-                entity already exists.
-            ValueError: If the response indicates that the requested entity
-                does not exist.
+            ValueError: if the response is not in the right format.
+            RuntimeError: if an error response is received from the server
+                and a more specific exception cannot be determined.
+            exc: the exception converted from an error response, if one
+                is returned from the server.
         """
         if 200 <= response.status_code < 300:
             try:
@@ -1670,61 +2830,15 @@ class RestZenStore(BaseZenStore):
                     "Bad response from API. Expected json, got\n"
                     f"{response.text}"
                 )
-        elif response.status_code == 401:
-            raise AuthorizationException(
-                f"{response.status_code} Client Error: Unauthorized request to "
-                f"URL {response.url}: {response.json().get('detail')}"
-            )
-        elif response.status_code == 403:
-            msg = response.json().get("detail", response.text)
-            if isinstance(msg, list):
-                msg = msg[-1]
-            raise IllegalOperationError(msg)
-        elif response.status_code == 404:
-            if "KeyError" in response.text:
-                raise KeyError(
-                    response.json().get("detail", (response.text,))[1]
-                )
-            elif "DoesNotExistException" in response.text:
-                message = ": ".join(
-                    response.json().get("detail", (response.text,))
-                )
-                raise DoesNotExistException(message)
-            raise DoesNotExistException("Endpoint does not exist.")
-        elif response.status_code == 409:
-            if "StackComponentExistsError" in response.text:
-                raise StackComponentExistsError(
-                    message=": ".join(
-                        response.json().get("detail", (response.text,))
-                    )
-                )
-            elif "StackExistsError" in response.text:
-                raise StackExistsError(
-                    message=": ".join(
-                        response.json().get("detail", (response.text,))
-                    )
-                )
-            elif "EntityExistsError" in response.text:
-                raise EntityExistsError(
-                    message=": ".join(
-                        response.json().get("detail", (response.text,))
-                    )
-                )
+        elif response.status_code >= 400:
+            exc = exception_from_response(response)
+            if exc is not None:
+                raise exc
             else:
-                raise ValueError(
-                    ": ".join(response.json().get("detail", (response.text,)))
+                raise RuntimeError(
+                    f"{response.status_code} HTTP Error received from server: "
+                    f"{response.text}"
                 )
-        elif response.status_code == 422:
-            response_details = response.json().get("detail", (response.text,))
-            if isinstance(response_details[0], str):
-                response_msg = ": ".join(response_details)
-            else:
-                # This is an "Unprocessable Entity" error, which has a special
-                # structure in the response.
-                response_msg = response.text
-            raise RuntimeError(response_msg)
-        elif response.status_code == 500:
-            raise RuntimeError(response.text)
         else:
             raise RuntimeError(
                 "Error retrieving from API. Got response "
@@ -1748,8 +2862,17 @@ class RestZenStore(BaseZenStore):
 
         Returns:
             The parsed response.
+
+        Raises:
+            AuthorizationException: if the request fails due to an expired
+                authentication token.
         """
         params = {k: str(v) for k, v in params.items()} if params else {}
+
+        self.session.headers.update(
+            {source_context.name: source_context.get().value}
+        )
+
         try:
             return self._handle_response(
                 self.session.request(
@@ -1763,8 +2886,12 @@ class RestZenStore(BaseZenStore):
             )
         except AuthorizationException:
             # The authentication token could have expired; refresh it and try
-            # again
-            self._session = None
+            # again. This will clear any cached token and trigger a new
+            # authentication flow.
+            self.clear_session()
+            logger.info("Authentication token expired; refreshing...")
+
+        try:
             return self._handle_response(
                 self.session.request(
                     method,
@@ -1775,6 +2902,11 @@ class RestZenStore(BaseZenStore):
                     **kwargs,
                 )
             )
+        except AuthorizationException:
+            logger.info(
+                "Your authentication token has expired. Please re-authenticate."
+            )
+            raise
 
     def get(
         self, path: str, params: Optional[Dict[str, Any]] = None, **kwargs: Any
@@ -1845,7 +2977,7 @@ class RestZenStore(BaseZenStore):
     def put(
         self,
         path: str,
-        body: BaseModel,
+        body: Optional[BaseModel] = None,
         params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Json:
@@ -1861,10 +2993,11 @@ class RestZenStore(BaseZenStore):
             The response body.
         """
         logger.debug(f"Sending PUT request to {path}...")
+        data = body.json(exclude_unset=True) if body else None
         return self._request(
             "PUT",
             self.url + API + VERSION_1 + path,
-            data=body.json(exclude_unset=True),
+            data=data,
             params=params,
             **kwargs,
         )
@@ -1891,14 +3024,14 @@ class RestZenStore(BaseZenStore):
         response_body = self.post(f"{route}", body=resource, params=params)
         return response_model.parse_obj(response_body)
 
-    def _create_project_scoped_resource(
+    def _create_workspace_scoped_resource(
         self,
-        resource: ProjectScopedRequestModel,
-        response_model: Type[AnyProjestResponseModel],
+        resource: WorkspaceScopedRequestModel,
+        response_model: Type[AnyResponseModel],
         route: str,
         params: Optional[Dict[str, Any]] = None,
-    ) -> AnyProjestResponseModel:
-        """Create a new project scoped resource.
+    ) -> AnyResponseModel:
+        """Create a new workspace scoped resource.
 
         Args:
             resource: The resource to create.
@@ -1913,15 +3046,93 @@ class RestZenStore(BaseZenStore):
         return self._create_resource(
             resource=resource,
             response_model=response_model,
-            route=f"{PROJECTS}/{str(resource.project)}{route}",
+            route=f"{WORKSPACES}/{str(resource.workspace)}{route}",
+            params=params,
+        )
+
+    def _get_or_create_resource(
+        self,
+        resource: BaseRequestModel,
+        response_model: Type[AnyResponseModel],
+        route: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[AnyResponseModel, bool]:
+        """Get or create a resource.
+
+        Args:
+            resource: The resource to get or create.
+            route: The resource REST API route to use.
+            response_model: Optional model to use to deserialize the response
+                body. If not provided, the resource class itself will be used.
+            params: Optional query parameters to pass to the endpoint.
+
+        Returns:
+            The created resource, and a boolean indicating whether the resource
+            was created or not.
+
+        Raises:
+            ValueError: If the response body is not a list with 2 elements
+                where the first element is the resource and the second element
+                a boolean indicating whether the resource was created or not.
+        """
+        response_body = self.post(
+            f"{route}{GET_OR_CREATE}",
+            body=resource,
+            params=params,
+        )
+        if not isinstance(response_body, list):
+            raise ValueError(
+                f"Expected a list response from the {route}{GET_OR_CREATE} "
+                f"endpoint but got {type(response_body)} instead."
+            )
+        if len(response_body) != 2:
+            raise ValueError(
+                f"Expected a list response with 2 elements from the "
+                f"{route}{GET_OR_CREATE} endpoint but got {len(response_body)} "
+                f"elements instead."
+            )
+        model_json, was_created = response_body
+        if not isinstance(was_created, bool):
+            raise ValueError(
+                f"Expected a boolean as the second element of the list "
+                f"response from the {route}{GET_OR_CREATE} endpoint but got "
+                f"{type(was_created)} instead."
+            )
+        return response_model.parse_obj(model_json), was_created
+
+    def _get_or_create_workspace_scoped_resource(
+        self,
+        resource: WorkspaceScopedRequestModel,
+        response_model: Type[AnyResponseModel],
+        route: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[AnyResponseModel, bool]:
+        """Get or create a workspace scoped resource.
+
+        Args:
+            resource: The resource to get or create.
+            route: The resource REST API route to use.
+            response_model: Optional model to use to deserialize the response
+                body. If not provided, the resource class itself will be used.
+            params: Optional query parameters to pass to the endpoint.
+
+        Returns:
+            The created resource, and a boolean indicating whether the resource
+            was created or not.
+        """
+        return self._get_or_create_resource(
+            resource=resource,
+            response_model=response_model,
+            route=f"{WORKSPACES}/{str(resource.workspace)}{route}",
             params=params,
         )
 
     def _get_resource(
         self,
-        resource_id: Union[str, UUID],
+        resource_id: Union[str, int, UUID],
         route: str,
         response_model: Type[AnyResponseModel],
+        params: Optional[Dict[str, Any]] = None,
     ) -> AnyResponseModel:
         """Retrieve a single resource.
 
@@ -1929,11 +3140,12 @@ class RestZenStore(BaseZenStore):
             resource_id: The ID of the resource to retrieve.
             route: The resource REST API route to use.
             response_model: Model to use to serialize the response body.
+            params: Optional query parameters to pass to the endpoint.
 
         Returns:
             The retrieved resource.
         """
-        body = self.get(f"{route}/{str(resource_id)}")
+        body = self.get(f"{route}/{str(resource_id)}", params=params)
         return response_model.parse_obj(body)
 
     def _list_paginated_resources(
@@ -1941,6 +3153,7 @@ class RestZenStore(BaseZenStore):
         route: str,
         response_model: Type[AnyResponseModel],
         filter_model: BaseFilterModel,
+        params: Optional[Dict[str, Any]] = None,
     ) -> Page[AnyResponseModel]:
         """Retrieve a list of resources filtered by some criteria.
 
@@ -1948,6 +3161,7 @@ class RestZenStore(BaseZenStore):
             route: The resource REST API route to use.
             response_model: Model to use to serialize the response body.
             filter_model: The filter model to use for the list query.
+            params: Optional query parameters to pass to the endpoint.
 
         Returns:
             List of retrieved resources matching the filter criteria.
@@ -1956,9 +3170,9 @@ class RestZenStore(BaseZenStore):
             ValueError: If the value returned by the server is not a list.
         """
         # leave out filter params that are not supplied
-        body = self.get(
-            f"{route}", params=filter_model.dict(exclude_none=True)
-        )
+        params = params or {}
+        params.update(filter_model.dict(exclude_none=True))
+        body = self.get(f"{route}", params=params)
         if not isinstance(body, dict):
             raise ValueError(
                 f"Bad API Response. Expected list, got {type(body)}"
@@ -2006,21 +3220,23 @@ class RestZenStore(BaseZenStore):
         resource_update: BaseModel,
         response_model: Type[AnyResponseModel],
         route: str,
+        params: Optional[Dict[str, Any]] = None,
     ) -> AnyResponseModel:
         """Update an existing resource.
 
         Args:
             resource_id: The id of the resource to update.
             resource_update: The resource update.
-            route: The resource REST API route to use.
             response_model: Optional model to use to deserialize the response
                 body. If not provided, the resource class itself will be used.
+            route: The resource REST API route to use.
+            params: Optional query parameters to pass to the endpoint.
 
         Returns:
             The updated resource.
         """
         response_body = self.put(
-            f"{route}/{str(resource_id)}", body=resource_update
+            f"{route}/{str(resource_id)}", body=resource_update, params=params
         )
 
         return response_model.parse_obj(response_body)

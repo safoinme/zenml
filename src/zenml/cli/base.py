@@ -1,4 +1,4 @@
-#  Copyright (c) ZenML GmbH 2022. All Rights Reserved.
+#  Copyright (c) ZenML GmbH 2022-2023. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -17,24 +17,33 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import click
+from pydantic import BaseModel
 
 from zenml import __version__ as zenml_version
+from zenml.analytics.enums import AnalyticsEvent
+from zenml.analytics.utils import email_opt_int, track_handler
+from zenml.cli import utils as cli_utils
 from zenml.cli.cli import cli
 from zenml.cli.server import down
 from zenml.cli.utils import confirmation, declare, error, warning
 from zenml.client import Client
 from zenml.config.global_config import GlobalConfiguration
 from zenml.console import console
-from zenml.constants import REPOSITORY_DIRECTORY_NAME
+from zenml.constants import (
+    ENV_ZENML_ENABLE_REPO_INIT_WARNINGS,
+    REPOSITORY_DIRECTORY_NAME,
+)
 from zenml.enums import AnalyticsEventSource
+from zenml.environment import Environment, get_environment
 from zenml.exceptions import GitNotFoundError, InitializationException
+from zenml.integrations.registry import integration_registry
 from zenml.io import fileio
 from zenml.logger import get_logger
-from zenml.utils.analytics_utils import AnalyticsEvent, event_handler
 from zenml.utils.io_utils import copy_dir, get_global_config_directory
+from zenml.utils.yaml_utils import write_yaml
 
 logger = get_logger(__name__)
 # WT_SESSION is a Windows Terminal specific environment variable. If it
@@ -44,6 +53,38 @@ _SHOW_EMOJIS = not os.name == "nt" or os.environ.get("WT_SESSION")
 TUTORIAL_REPO = "https://github.com/zenml-io/zenml"
 
 
+class ZenMLProjectTemplateLocation(BaseModel):
+    """A ZenML project template location."""
+
+    github_url: str
+    github_tag: str
+
+    @property
+    def copier_github_url(self) -> str:
+        """Get the GitHub URL for the copier.
+
+        Returns:
+            A GitHub URL in copier format.
+        """
+        return f"gh:{self.github_url}"
+
+
+ZENML_PROJECT_TEMPLATES = dict(
+    e2e_batch=ZenMLProjectTemplateLocation(
+        github_url="zenml-io/template-e2e-batch",
+        github_tag="2023.10.10",  # Make sure it is aligned with .github/workflows/update-templates-to-examples.yml
+    ),
+    starter=ZenMLProjectTemplateLocation(
+        github_url="zenml-io/template-starter",
+        github_tag="0.45.0",
+    ),
+    nlp=ZenMLProjectTemplateLocation(
+        github_url="zenml-io/template-nlp",
+        github_tag="0.45.0",
+    ),
+)
+
+
 @cli.command("init", help="Initialize a ZenML repository.")
 @click.option(
     "--path",
@@ -51,21 +92,145 @@ TUTORIAL_REPO = "https://github.com/zenml-io/zenml"
         exists=True, file_okay=False, dir_okay=True, path_type=Path
     ),
 )
-def init(path: Optional[Path]) -> None:
+@click.option(
+    "--template",
+    type=str,
+    required=False,
+    help="Name or URL of the ZenML project template to use to initialize the repository, "
+    "Can be a string like `e2e_batch`, `nlp`, `starter` etc. or a copier URL like "
+    "gh:owner/repo_name. If not specified, no template is used.",
+)
+@click.option(
+    "--template-tag",
+    type=str,
+    required=False,
+    help="Optional tag of the ZenML project template to use to initialize the repository.",
+)
+@click.option(
+    "--template-with-defaults",
+    is_flag=True,
+    default=False,
+    required=False,
+    help="Whether to use default parameters of the ZenML project template",
+)
+def init(
+    path: Optional[Path],
+    template: Optional[str] = None,
+    template_tag: Optional[str] = None,
+    template_with_defaults: bool = False,
+) -> None:
     """Initialize ZenML on given path.
 
     Args:
         path: Path to the repository.
+        template: Optional name or URL of the ZenML project template to use to initialize
+            the repository. Can be a string like `e2e_batch`, `nlp`, `starter` or a copier URL like
+            `gh:owner/repo_name`. If not specified, no template is used.
+        template_tag: Optional tag of the ZenML project template to use to initialize the repository/
+            If template is a pre-defined template, then this is ignored.
+        template_with_defaults: Whether to use default parameters of
+            the ZenML project template
     """
     if path is None:
         path = Path.cwd()
+
+    os.environ[ENV_ZENML_ENABLE_REPO_INIT_WARNINGS] = "False"
+
+    if template:
+        try:
+            from copier import Worker
+        except ImportError:
+            error(
+                "You need to install the ZenML project template requirements "
+                "to use templates. Please run `pip install zenml[templates]` "
+                "and try again."
+            )
+            return
+
+        from zenml.cli.text_utils import (
+            zenml_cli_privacy_message,
+            zenml_cli_welcome_message,
+        )
+
+        console.print(zenml_cli_welcome_message, width=80)
+
+        client = Client()
+        # Only ask them if they haven't been asked before and the email
+        # hasn't been supplied by other means
+        if (
+            not GlobalConfiguration().user_email
+            and client.active_user.email_opted_in is None
+        ):
+            _prompt_email(AnalyticsEventSource.ZENML_INIT)
+
+        email = GlobalConfiguration().user_email or ""
+        metadata = {
+            "email": email,
+            "template": template,
+            "prompt": not template_with_defaults,
+        }
+
+        with track_handler(
+            event=AnalyticsEvent.GENERATE_TEMPLATE,
+            metadata=metadata,
+        ):
+            console.print(zenml_cli_privacy_message, width=80)
+
+            if not template_with_defaults:
+                from rich.markdown import Markdown
+
+                prompt_message = Markdown(
+                    """
+## 🧑‍🏫 Project template parameters
+"""
+                )
+
+                console.print(prompt_message, width=80)
+
+            # Check if template is a URL or a preset template name
+            vcs_ref: Optional[str] = None
+            if template in ZENML_PROJECT_TEMPLATES:
+                declare(f"Using the {template} template...")
+                zenml_project_template = ZENML_PROJECT_TEMPLATES[template]
+                src_path = zenml_project_template.copier_github_url
+                # template_tag is ignored in this case
+                vcs_ref = zenml_project_template.github_tag
+            else:
+                declare(
+                    f"List of known templates is: {', '.join(ZENML_PROJECT_TEMPLATES.keys())}"
+                )
+                declare(
+                    f"No known templates specified. Using `{template}` as URL."
+                    "If this is not a valid copier template URL, this will fail."
+                )
+
+                src_path = template
+                vcs_ref = template_tag
+
+            with Worker(
+                src_path=src_path,
+                vcs_ref=vcs_ref,
+                dst_path=path,
+                data=dict(
+                    email=email,
+                    template=template,
+                ),
+                defaults=template_with_defaults,
+                user_defaults=dict(
+                    email=email,
+                ),
+                overwrite=template_with_defaults,
+                unsafe=True,
+            ) as worker:
+                worker.run_copy()
 
     with console.status(f"Initializing ZenML repository at {path}.\n"):
         try:
             Client.initialize(root=path)
             declare(f"ZenML repository initialized at {path}.")
         except InitializationException as e:
-            error(f"{e}")
+            declare(f"{e}")
+            return
 
     declare(
         f"The local active stack was initialized to "
@@ -73,7 +238,7 @@ def init(path: Optional[Path]) -> None:
         f"will only take effect when you're running ZenML from the initialized "
         f"repository root, or from a subdirectory. For more information on "
         f"repositories and configurations, please visit "
-        f"https://docs.zenml.io/starter-guide/stacks/managing-stacks."
+        f"https://docs.zenml.io/user-guide/starter-guide/understand-stacks."
     )
 
 
@@ -201,14 +366,14 @@ def go() -> None:
         GitNotFoundError: If git is not installed.
     """
     from zenml.cli.text_utils import (
+        zenml_cli_privacy_message,
+        zenml_cli_welcome_message,
         zenml_go_notebook_tutorial_message,
-        zenml_go_privacy_message,
-        zenml_go_welcome_message,
     )
 
     metadata = {}
 
-    console.print(zenml_go_welcome_message, width=80)
+    console.print(zenml_cli_welcome_message, width=80)
 
     client = Client()
 
@@ -218,12 +383,11 @@ def go() -> None:
         not GlobalConfiguration().user_email
         and client.active_user.email_opted_in is None
     ):
-        gave_email = _prompt_email()
+        gave_email = _prompt_email(AnalyticsEventSource.ZENML_GO)
         metadata = {"gave_email": gave_email}
 
-    with event_handler(event=AnalyticsEvent.RUN_ZENML_GO, metadata=metadata):
-
-        console.print(zenml_go_privacy_message, width=80)
+    with track_handler(event=AnalyticsEvent.RUN_ZENML_GO, metadata=metadata):
+        console.print(zenml_cli_privacy_message, width=80)
 
         zenml_tutorial_path = os.path.join(os.getcwd(), "zenml_tutorial")
 
@@ -231,7 +395,7 @@ def go() -> None:
             try:
                 from git.repo.base import Repo
             except ImportError as e:
-                logger.error(
+                cli_utils.error(
                     "At this point we would want to clone our tutorial repo "
                     "onto your machine to let you dive right into our code. "
                     "However, this machine has no installation of Git. Feel "
@@ -257,7 +421,7 @@ def go() -> None:
                 )
                 copy_dir(example_dir, zenml_tutorial_path)
         else:
-            logger.warning(
+            cli_utils.warning(
                 f"{zenml_tutorial_path} already exists! Continuing without "
                 "cloning."
             )
@@ -278,18 +442,21 @@ def go() -> None:
     subprocess.check_call(["jupyter", "notebook"], cwd=notebook_path)
 
 
-def _prompt_email() -> bool:
+def _prompt_email(event_source: AnalyticsEventSource) -> bool:
     """Ask the user to give their email address.
+
+    Args:
+        event_source: The source of the event to use for analytics.
 
     Returns:
         bool: True if the user gave an email address, False otherwise.
     """
     from zenml.cli.text_utils import (
-        zenml_go_email_prompt,
-        zenml_go_thank_you_message,
+        zenml_cli_email_prompt,
+        zenml_cli_thank_you_message,
     )
 
-    console.print(zenml_go_email_prompt, width=80)
+    console.print(zenml_cli_email_prompt, width=80)
 
     email = click.prompt(
         click.style("Email", fg="blue"), default="", show_default=False
@@ -299,26 +466,23 @@ def _prompt_email() -> bool:
         if len(email) > 0 and email.count("@") != 1:
             warning("That doesn't look like an email. Skipping ...")
         else:
-            console.print(zenml_go_thank_you_message, width=80)
+            console.print(zenml_cli_thank_you_message, width=80)
 
-            # For now, hard-code to ZENML GO as the source
-            GlobalConfiguration().record_email_opt_in_out(
-                opted_in=True,
-                email=email,
-                source=AnalyticsEventSource.ZENML_GO,
-            )
+            email_opt_int(opted_in=True, email=email, source=event_source)
+
+            GlobalConfiguration().user_email_opt_in = True
 
             # Add consent and email to user model
             client.update_user(
-                user_name_or_id=client.active_user.id,
+                name_id_or_prefix=client.active_user.id,
                 updated_email=email,
                 updated_email_opt_in=True,
             )
             return True
     else:
-        GlobalConfiguration().record_email_opt_in_out(
-            opted_in=False, email=None, source=AnalyticsEventSource.ZENML_GO
-        )
+        GlobalConfiguration().user_email_opt_in = False
+
+        email_opt_int(opted_in=False, email=None, source=event_source)
 
         # This is the case where user opts out
         client.update_user(
@@ -327,3 +491,106 @@ def _prompt_email() -> bool:
         )
 
     return False
+
+
+@cli.command(
+    "info", help="Show information about the current user setup.", hidden=True
+)
+@click.option(
+    "--all",
+    "-a",
+    is_flag=True,
+    default=False,
+    help="Output information about all installed packages.",
+    type=bool,
+)
+@click.option(
+    "--file",
+    "-f",
+    default="",
+    help="Path to export to a .yaml file.",
+    type=click.Path(exists=False, dir_okay=False),
+)
+@click.option(
+    "--packages",
+    "-p",
+    multiple=True,
+    help="Select specific installed packages.",
+    type=str,
+)
+@click.option(
+    "--stack",
+    "-s",
+    is_flag=True,
+    default=False,
+    help="Output information about active stack and components.",
+    type=bool,
+)
+def info(
+    packages: Tuple[str],
+    all: bool = False,
+    file: str = "",
+    stack: bool = False,
+) -> None:
+    """Show information about the current user setup.
+
+    Args:
+        packages: List of packages to show information about.
+        all: Flag to show information about all installed packages.
+        file: Flag to output to a file.
+        stack: Flag to output information about active stack and components
+    """
+    gc = GlobalConfiguration()
+    environment = Environment()
+    client = Client()
+    store_info = client.zen_store.get_store_info()
+
+    store_cfg = gc.store
+
+    user_info = {
+        "zenml_local_version": zenml_version,
+        "zenml_server_version": store_info.version,
+        "zenml_server_database": str(store_info.database_type),
+        "zenml_server_deployment_type": str(store_info.deployment_type),
+        "zenml_config_dir": gc.config_directory,
+        "zenml_local_store_dir": gc.local_stores_path,
+        "zenml_server_url": "" if store_cfg is None else store_cfg.url,
+        "zenml_active_repository_root": str(client.root),
+        "python_version": environment.python_version(),
+        "environment": get_environment(),
+        "system_info": environment.get_system_info(),
+        "active_workspace": client.active_workspace.name,
+        "active_stack": client.active_stack_model.name,
+        "active_user": client.active_user.name,
+        "telemetry_status": "enabled" if gc.analytics_opt_in else "disabled",
+        "analytics_client_id": str(gc.user_id),
+        "analytics_user_id": str(client.active_user.id),
+        "analytics_server_id": str(client.zen_store.get_store_info().id),
+        "integrations": integration_registry.get_installed_integrations(),
+        "packages": {},
+        "query_packages": {},
+    }
+
+    if all:
+        user_info["packages"] = cli_utils.get_package_information()
+    if packages:
+        if user_info.get("packages"):
+            if isinstance(user_info["packages"], dict):
+                user_info["query_packages"] = {
+                    p: v
+                    for p, v in user_info["packages"].items()
+                    if p in packages
+                }
+        else:
+            user_info["query_packages"] = cli_utils.get_package_information(
+                list(packages)
+            )
+    if file:
+        file_write_path = os.path.abspath(file)
+        write_yaml(file, user_info)
+        declare(f"Wrote user debug info to file at '{file_write_path}'.")
+    else:
+        cli_utils.print_user_info(user_info)
+
+    if stack:
+        cli_utils.print_debug_stack()

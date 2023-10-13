@@ -19,14 +19,17 @@ from uuid import UUID
 from zenml.client import Client
 from zenml.config.step_run_info import StepRunInfo
 from zenml.entrypoints.step_entrypoint_configuration import (
+    STEP_NAME_OPTION,
     StepEntrypointConfiguration,
 )
 from zenml.orchestrators import input_utils, output_utils
 from zenml.orchestrators.step_runner import StepRunner
 
 if TYPE_CHECKING:
-    from zenml.config.pipeline_deployment import PipelineDeployment
     from zenml.config.step_configurations import Step
+    from zenml.models.pipeline_deployment_models import (
+        PipelineDeploymentBaseModel,
+    )
 
 STEP_RUN_ID_OPTION = "step_run_id"
 
@@ -66,7 +69,7 @@ class StepOperatorEntrypointConfiguration(StepEntrypointConfiguration):
     def _run_step(
         self,
         step: "Step",
-        deployment: "PipelineDeployment",
+        deployment: "PipelineDeploymentBaseModel",
     ) -> None:
         """Runs a single step.
 
@@ -80,8 +83,9 @@ class StepOperatorEntrypointConfiguration(StepEntrypointConfiguration):
 
         step_run_info = StepRunInfo(
             config=step.config,
-            pipeline=deployment.pipeline,
+            pipeline=deployment.pipeline_configuration,
             run_name=pipeline_run.name,
+            pipeline_step_name=self.entrypoint_args[STEP_NAME_OPTION],
             run_id=pipeline_run.id,
             step_run_id=step_run_id,
         )
@@ -96,6 +100,8 @@ class StepOperatorEntrypointConfiguration(StepEntrypointConfiguration):
 
         step_runner = StepRunner(step=step, stack=stack)
         step_runner.run(
+            pipeline_run=pipeline_run,
+            step_run=step_run,
             input_artifacts=input_artifacts,
             output_artifact_uris=output_artifact_uris,
             step_run_info=step_run_info,
