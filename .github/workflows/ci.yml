@@ -18,7 +18,7 @@ concurrency:
 jobs:
   mlstacks-compatibility-check:
     if: github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-arc-runner-set
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -41,7 +41,7 @@ jobs:
     if: github.event.pull_request.draft == false
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-arc-runner-set]
         python-version: ["3.8", "3.9", "3.10", "3.11"]
       fail-fast: false
     uses: ./.github/workflows/setup-python-environment.yml

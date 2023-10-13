@@ -28,11 +28,11 @@ on:
         description: 'OS'
         type: choice
         options: 
-          - ubuntu-latest
+          - ubuntu-arc-runner-set
           - macos-latest
           - windows-latest
         required: false
-        default: 'ubuntu-latest'
+        default: 'ubuntu-arc-runner-set'
       python-version:
         description: 'Python version'
         type: choice
