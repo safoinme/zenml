@@ -32,7 +32,7 @@ on:
         description: 'OS'
         type: choice
         options: 
-          - ubuntu-runner-scale-set
+          - ubuntu-runners-set
           - self-hosted
           - ubuntu-latest
           - macos-latest
