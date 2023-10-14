@@ -28,7 +28,7 @@ on:
         description: 'OS'
         type: choice
         options: 
-          - ubuntu-runners-set
+          - zenml-runners
           - self-hosted
           - macos-latest
           - windows-latest
