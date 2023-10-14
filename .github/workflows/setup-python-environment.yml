@@ -28,7 +28,7 @@ on:
         description: 'OS'
         type: choice
         options: 
-          - ubuntu-arc-runner-set
+          - ubuntu-runner-scale-set
           - self-hosted
           - macos-latest
           - windows-latest
