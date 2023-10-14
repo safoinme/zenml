@@ -33,6 +33,7 @@ on:
         type: choice
         options: 
           - ubuntu-arc-runner-set
+          - self-hosted
           - ubuntu-latest
           - macos-latest
           - windows-latest
