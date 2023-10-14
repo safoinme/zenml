@@ -29,6 +29,7 @@ on:
         type: choice
         options: 
           - ubuntu-arc-runner-set
+          - self-hosted
           - macos-latest
           - windows-latest
         required: false

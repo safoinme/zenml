@@ -18,7 +18,7 @@ concurrency:
 jobs:
   mlstacks-compatibility-check:
     if: github.event.pull_request.draft == false
-    runs-on: ubuntu-arc-runner-set
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -41,7 +41,7 @@ jobs:
     if: github.event.pull_request.draft == false
     strategy:
       matrix:
-        os: [ubuntu-arc-runner-set]
+        os: [self-hosted, ubuntu-latest]
         python-version: ["3.8", "3.9", "3.10", "3.11"]
       fail-fast: false
     uses: ./.github/workflows/setup-python-environment.yml
@@ -89,7 +89,7 @@ jobs:
       - ubuntu-setup-and-test-python
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [self-hosted, ubuntu-latest]
         # Disabled temporarily while CI is overhauled
         python-version: ["3.8", "3.9", "3.10"]
         # python-version: ["3.8", "3.9", "3.10", "3.11"]
