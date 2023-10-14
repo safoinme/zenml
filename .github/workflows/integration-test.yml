@@ -188,9 +188,9 @@ jobs:
       - name: Install Linux System Dependencies
         if: runner.os=='Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install software-properties-common
-          sudo apt-get install graphviz
+          sudo apt-get update -y
+          sudo apt-get install software-properties-common -y
+          sudo apt-get install graphviz -y
 
       - name: Install MacOS System Dependencies
         if: runner.os=='macOS'
