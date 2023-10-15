@@ -41,7 +41,7 @@ jobs:
     if: github.event.pull_request.draft == false
     strategy:
       matrix:
-        os: [zenml-runners]
+        os: [self-hosted, zenml-runners]
         python-version: ["3.8", "3.9", "3.10", "3.11"]
       fail-fast: false
     uses: ./.github/workflows/setup-python-environment.yml
@@ -49,13 +49,14 @@ jobs:
       python-version: ${{ matrix.python-version }}
       os: ${{ matrix.os }}
     secrets: inherit
+
   
   update-templates-to-examples:
     needs: ubuntu-setup-and-test-python
     uses: ./.github/workflows/update-templates-to-examples.yml
     with:
       python-version: "3.8"
-      os: ubuntu-latest
+      os: zenml-runners
     secrets: inherit
 
   ubuntu-integration-test:
@@ -89,5 +90,4 @@ jobs:
       python-version: ${{ matrix.python-version }}
       test_environment: ${{ matrix.test_environment }}
     secrets: inherit
-
 
