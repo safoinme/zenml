@@ -92,6 +92,7 @@ runs:
       if: steps.cache-virtualenv.outputs.cache-hit != 'true'
       shell: bash
       run: |
+        python -m pip install --upgrade pip
         scripts/install-zenml-dev.sh --integrations ${{inputs.install_integrations}}
 
       # if using a cached virtualenv, just refresh the ZenML installation 
