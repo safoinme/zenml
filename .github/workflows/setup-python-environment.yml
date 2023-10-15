@@ -29,11 +29,10 @@ on:
         type: choice
         options: 
           - zenml-runners
-          - self-hosted
           - macos-latest
           - windows-latest
         required: false
-        default: 'ubuntu-arc-runner-set'
+        default: 'zenml-runners'
       python-version:
         description: 'Python version'
         type: choice
