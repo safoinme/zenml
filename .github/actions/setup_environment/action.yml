@@ -120,7 +120,7 @@ runs:
     - name: Cache ZenML
       id: save-cache-zenml
       uses: actions/cache/save@v3
-      if: steps.restore-cache-zenml.outputs.cache-hit == 'true'
+      if: steps.restore-cache-zenml.outputs.cache-hit != 'true'
       with:
         path: |
           /home/runner/_work/.cache/pip
