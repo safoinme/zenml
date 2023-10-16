@@ -107,7 +107,7 @@ jobs:
             df -h
 
       - name: Reinstall packages needed for unit tests
-        if: ${{ inputs.os == 'zenml-runners' }}
+        if: ${{ inputs.os == 'zenml-runners' || inputs.os == 'ubuntu-latest' }}
         run: sudo apt-get update && sudo apt-get install ffmpeg libsm6 libxext6 -y
 
       - name: Setup environment
