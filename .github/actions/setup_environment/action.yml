@@ -89,7 +89,6 @@ runs:
     #     # The pip download cache can be updated on a weekly basis as new packages
     #     # don't appear that often
     #     custom_cache_key_element: ${{ inputs.cache_version }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}
-
     - name: Install Terraform (Windows)
       if: ${{ inputs.os == 'windows-latest' }}
       shell: bash
@@ -100,6 +99,9 @@ runs:
       shell: bash
       run: |
         sudo apt-get update -y
+        sudo apt-get install software-properties-common -y
+        sudo apt-get install graphviz -y
+        sudo apt-get install curl wget -y
         sudo apt-get install -y gnupg software-properties-common curl -y
         curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
         sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
