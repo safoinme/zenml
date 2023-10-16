@@ -62,7 +62,6 @@ runs:
       with:
         path: |
           /home/runner/_work/.cache/pip
-          /home/runner/_work/.cache/env
         key: zenml-${{ inputs.os }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/src/zenml/integrations/*/__init__.py') }}
 
 
@@ -124,7 +123,6 @@ runs:
       with:
         path: |
           /home/runner/_work/.cache/pip
-          /home/runner/_work/.cache/env
         key: zenml-${{ inputs.os }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/src/zenml/integrations/*/__init__.py') }}
 
 
