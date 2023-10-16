@@ -80,7 +80,7 @@ jobs:
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
-        if: ${{ inputs.os == 'zenml-runners' }}
+        if: ${{ inputs.os == 'ubuntu-latest' }}
         with:
           # this might remove tools that are actually needed,
           # if set to "true" but frees about 6 GB
@@ -96,7 +96,7 @@ jobs:
           swap-storage: true
 
       - name: clean unnecessary files to save space
-        if: ${{ inputs.os == 'zenml-runners' }}
+        if: ${{ inputs.os == 'ubuntu-latest' }}
         run: |
             sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/sudo apt/sources.list.d
             sudo apt -y autoremove --purge
