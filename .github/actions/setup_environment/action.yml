@@ -58,7 +58,7 @@ runs:
 
     - name: Cache ZenML
       id: restore-cache-zenml
-      uses: maxnowack/local-cache/restore@v1
+      uses: actions/cache/restore@v3
       with:
         path: |
           /home/runner/_work/.cache/pip
@@ -119,7 +119,7 @@ runs:
       
     - name: Cache ZenML
       id: save-cache-zenml
-      uses: maxnowack/local-cache/save@v1
+      uses: actions/cache/save@v3
       if: steps.restore-cache-zenml.outputs.cache-hit == 'true'
       with:
         path: |
