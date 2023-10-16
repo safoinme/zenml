@@ -57,12 +57,18 @@ runs:
       run: echo "::set-output name=week::$(date +'calendar-week-%W')"
 
     - name: Cache ZenML
-      id: restore-cache-zenml
-      uses: actions/cache/restore@v3
+      id: cache-zenml
+      uses: actions/cache@v3
       with:
-        path: |
-          /home/runner/_work/.cache/pip
         key: zenml-${{ inputs.os }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/src/zenml/integrations/*/__init__.py') }}
+
+    #- name: Cache ZenML
+    #  id: restore-cache-zenml
+    #  uses: actions/cache/restore@v3
+    #  with:
+    #    path: |
+    #      /home/runner/_work/.cache/pip
+    #    key: zenml-${{ inputs.os }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/src/zenml/integrations/*/__init__.py') }}
 
 
     #- uses: syphar/restore-virtualenv@v1
@@ -89,15 +95,15 @@ runs:
       shell: bash
       run: choco install terraform -y
 
-    #- name: Install Terraform (Linux)
-    #  if: ${{ inputs.os == 'zenml-runners' }}
-    #  shell: bash
-    #  run: |
-    #    sudo apt-get update -y
-    #    sudo apt-get install -y gnupg software-properties-common curl -y
-    #    curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-    #    sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-    #    sudo apt-get update && sudo apt-get install terraform -y
+    - name: Install Terraform (Linux)
+      if: ${{ inputs.os == 'zenml-runners' }}
+      shell: bash
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y gnupg software-properties-common curl -y
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+        sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+        sudo apt-get update && sudo apt-get install terraform -y
     
     - name: Install Terraform (Mac)
       if: ${{ inputs.os == 'macos-latest' }}
@@ -107,14 +113,14 @@ runs:
         brew install hashicorp/tap/terraform
 
     - name: Install ZenML and dependencies
-      if: steps.restore-cache-zenml.outputs.cache-hit != 'true'
+      if: steps.cache-zenml.outputs.cache-hit != 'true'
       shell: bash
       run: |
         scripts/install-zenml-dev.sh --integrations ${{inputs.install_integrations}}
 
       # if using a cached virtualenv, just refresh the ZenML installation 
     - name: Refresh ZenML installation
-      if: steps.restore-cache-zenml.outputs.cache-hit == 'true'
+      if: steps.cache-zenml.outputs.cache-hit == 'true'
       shell: bash
       run: |
         scripts/install-zenml-dev.sh
@@ -125,14 +131,4 @@ runs:
         zenml integration list
         pip list
         pip check || true
-      
-    - name: Cache ZenML
-      id: save-cache-zenml
-      uses: actions/cache/save@v3
-      if: steps.restore-cache-zenml.outputs.cache-hit != 'true'
-      with:
-        path: |
-          /home/runner/_work/.cache/pip
-        key: zenml-${{ inputs.os }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/src/zenml/integrations/*/__init__.py') }}
-
 

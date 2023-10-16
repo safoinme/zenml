@@ -19,8 +19,9 @@ on:
         type: choice
         options: 
           - zenml-runners
-          #- macos-latest
-          #- windows-latest
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
         required: false
         default: 'ubuntu-latest'
       python-version:
