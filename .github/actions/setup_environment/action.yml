@@ -25,7 +25,8 @@ runs:
       uses: actions/setup-python@v4
       with:
         python-version: ${{ inputs.python-version }}
-    
+
+
     - name: Delete error-causing bash
       shell: bash
       if: ${{ inputs.os == 'windows-latest' }}
@@ -56,31 +57,16 @@ runs:
       id: date
       run: echo "::set-output name=week::$(date +'calendar-week-%W')"
 
-    - name: Cache ZenML
-      id: cache-zenml
-      uses: actions/cache@v3
+    - uses: syphar/restore-virtualenv@v1
+      id: cache-virtualenv
       with:
-        key: zenml-${{ inputs.os }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/src/zenml/integrations/*/__init__.py') }}
-
-    #- name: Cache ZenML
-    #  id: restore-cache-zenml
-    #  uses: actions/cache/restore@v3
-    #  with:
-    #    path: |
-    #      /home/runner/_work/.cache/pip
-    #    key: zenml-${{ inputs.os }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/src/zenml/integrations/*/__init__.py') }}
-
-
-    #- uses: syphar/restore-virtualenv@v1
-    #  id: cache-virtualenv
-    #  with:
-    #    requirement_files: 'pyproject.toml'
+        requirement_files: 'pyproject.toml'
         # The virtualenv cache is invalidated when:
         # - manually triggered by means of a custom cache version token
         # - on a weekly basis
         # - any of the integration requirements change (a hash of the
         # __init__.py files is included in the cache key)
-    #x    custom_cache_key_element: ${{ inputs.cache_version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('/home/runner/_work/zenml/zenml/integrations/*/__init__.py') }}
+        custom_cache_key_element: ${{ inputs.cache_version }}-${{steps.date.outputs.week}}-${{inputs.install_integrations}}-${{ hashFiles('src/zenml/integrations/*/__init__.py') }}
 
     # Disabled for now because it doesn't work well with multiple parallel jobs
     # - uses: syphar/restore-pip-download-cache@v1
@@ -89,24 +75,12 @@ runs:
     #     # The pip download cache can be updated on a weekly basis as new packages
     #     # don't appear that often
     #     custom_cache_key_element: ${{ inputs.cache_version }}-${{ inputs.python-version }}-${{steps.date.outputs.week}}
+
     - name: Install Terraform (Windows)
       if: ${{ inputs.os == 'windows-latest' }}
       shell: bash
       run: choco install terraform -y
 
-    - name: Install Terraform (Linux)
-      if: ${{ inputs.os == 'zenml-runners' }}
-      shell: bash
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install software-properties-common -y
-        sudo apt-get install graphviz -y
-        sudo apt-get install curl wget -y
-        sudo apt-get install -y gnupg software-properties-common curl -y
-        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-        sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-        sudo apt-get update && sudo apt-get install terraform -y
-    
     - name: Install Terraform (Mac)
       if: ${{ inputs.os == 'macos-latest' }}
       shell: bash
@@ -115,14 +89,14 @@ runs:
         brew install hashicorp/tap/terraform
 
     - name: Install ZenML and dependencies
-      if: steps.cache-zenml.outputs.cache-hit != 'true'
+      if: steps.cache-virtualenv.outputs.cache-hit != 'true'
       shell: bash
       run: |
         scripts/install-zenml-dev.sh --integrations ${{inputs.install_integrations}}
 
       # if using a cached virtualenv, just refresh the ZenML installation 
     - name: Refresh ZenML installation
-      if: steps.cache-zenml.outputs.cache-hit == 'true'
+      if: steps.cache-virtualenv.outputs.cache-hit == 'true'
       shell: bash
       run: |
         scripts/install-zenml-dev.sh
@@ -133,4 +107,3 @@ runs:
         zenml integration list
         pip list
         pip check || true
-

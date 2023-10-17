@@ -34,7 +34,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.8", "3.10", "3.11"]
+        python-version: ["3.8","3.9", "3.10", "3.11"]
       fail-fast: false
     uses: ./.github/workflows/setup-python-environment.yml
     with:
@@ -42,25 +42,13 @@ jobs:
       os: ${{ matrix.os }}
     secrets: inherit
 
-  self-hosted-runners-setup-and-test-python:
-    if: github.event.pull_request.draft == false
-    strategy:
-      matrix:
-        os: [self-hosted]
-        python-version: ["3.8", "3.9", "3.11"]
-      fail-fast: false
-    uses: ./.github/workflows/setup-python-environment.yml
-    with:
-      python-version: ${{ matrix.python-version }}
-      os: ${{ matrix.os }}
-    secrets: inherit
 
   zenml-runners-setup-and-test-python:
     if: github.event.pull_request.draft == false
     strategy:
       matrix:
         os: [zenml-runners]
-        python-version: ["3.8", "3.10", "3.11"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
       fail-fast: false
     uses: ./.github/workflows/setup-python-environment.yml
     with:
@@ -73,7 +61,7 @@ jobs:
     strategy:
       matrix:
         os: [windows-latest]
-        python-version: ["3.8", "3.9", "3.10"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
       fail-fast: false
     uses: ./.github/workflows/setup-python-environment.yml
     with:
@@ -86,7 +74,7 @@ jobs:
     strategy:
       matrix:
         os: [macos-latest]
-        python-version: ["3.8", "3.10", "3.11"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
       fail-fast: false
     uses: ./.github/workflows/setup-python-environment.yml
     with:
@@ -108,7 +96,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         # Disabled temporarily while CI is overhauled
-        python-version: ["3.8", "3.9", "3.10"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
         # python-version: ["3.8", "3.9", "3.10", "3.11"]
         test_environment:
           [
@@ -131,35 +119,6 @@ jobs:
       test_environment: ${{ matrix.test_environment }}
     secrets: inherit
 
-  self-hosted-runners-integration-test:
-    needs:
-      - self-hosted-runners-setup-and-test-python
-    strategy:
-      matrix:
-        os: [self-hosted]
-        # Disabled temporarily while CI is overhauled
-        python-version: ["3.8", "3.10"]
-        # python-version: ["3.8", "3.9", "3.10", "3.11"]
-        test_environment:
-          [
-            "default",
-            "docker-server-docker-orchestrator",
-          ]
-        exclude:
-          # docker is time-consuming to run, so we only run it on 3.8
-          - test_environment: docker-server-docker-orchestrator
-            python-version: "3.9"
-          - test_environment: docker-server-docker-orchestrator
-            python-version: "3.10"
-          - test_environment: docker-server-docker-orchestrator
-            python-version: "3.11"
-      fail-fast: false
-    uses: ./.github/workflows/integration-test.yml
-    with:
-      os: ${{ matrix.os }}
-      python-version: ${{ matrix.python-version }}
-      test_environment: ${{ matrix.test_environment }}
-    secrets: inherit
 
   zenml-runners-integration-test:
     needs:
@@ -168,7 +127,7 @@ jobs:
       matrix:
         os: [zenml-runners]
         # Disabled temporarily while CI is overhauled
-        python-version: ["3.8", "3.9", "3.10"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
         # python-version: ["3.8", "3.9", "3.10", "3.11"]
         test_environment:
           [
@@ -197,7 +156,7 @@ jobs:
     strategy:
       matrix:
         os: [windows-latest]
-        python-version: ["3.8", "3.9", "3.10", ]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
         test_environment: ["default"]
 
       fail-fast: false
@@ -215,7 +174,7 @@ jobs:
     strategy:
       matrix:
         os: [macos-latest]
-        python-version: [ "3.9", "3.10", "3.11"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
         test_environment: ["default"]
 
       fail-fast: false
