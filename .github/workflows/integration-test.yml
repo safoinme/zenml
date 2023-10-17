@@ -185,6 +185,10 @@ jobs:
         if: inputs.test_environment != 'default'
         run: pip install docker-compose
 
+      - name: Temporary install of ffmpeg
+        if: ${{ inputs.os == 'zenml-runners' }}
+        run: sudo apt-get update && sudo apt-get install ffmpeg -y
+
       - name: Install Linux System Dependencies
         if: ${{ inputs.os == 'ubuntu-latest' }}
         run: |
