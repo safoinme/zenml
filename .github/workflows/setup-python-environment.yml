@@ -108,6 +108,10 @@ jobs:
         if: ${{ inputs.os == 'ubuntu-latest' }}
         run: sudo apt-get update && sudo apt-get install ffmpeg libsm6 libxext6 -y
 
+      - name: Temporary install of ffmpeg
+        if: ${{ inputs.os == 'zenml-runners' }}
+        run: sudo apt-get update && sudo apt-get install ffmpeg -y
+        
       - name: Setup environment
         uses: ./.github/actions/setup_environment
         with:
