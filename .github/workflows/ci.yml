@@ -15,7 +15,7 @@ concurrency:
 jobs:
   mlstacks-compatibility-check:
     if: github.event.pull_request.draft == false
-    runs-on: self-hosted
+    runs-on: zenml-runners
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
