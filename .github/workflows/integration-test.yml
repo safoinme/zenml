@@ -32,6 +32,7 @@ on:
         description: 'OS'
         type: choice
         options: 
+          - zenml-runners
           - ubuntu-latest
           - macos-latest
           - windows-latest
@@ -145,12 +146,12 @@ jobs:
           remove-android: 'true'
           remove-haskell: 'true'
           build-mount-path: /var/lib/docker
-        if: runner.os=='Linux' && (contains(inputs.test_environment, 'docker') || contains(inputs.test_environment, 'kubeflow') || contains(inputs.test_environment, 'airflow') || contains(inputs.test_environment, 'kubernetes'))
+        if: inputs.os=='Ubuntu-latest' && (contains(inputs.test_environment, 'docker') || contains(inputs.test_environment, 'kubeflow') || contains(inputs.test_environment, 'airflow') || contains(inputs.test_environment, 'kubernetes'))
 
       - name: Reload Docker
         run:
           sudo systemctl restart docker
-        if: runner.os=='Linux' && (contains(inputs.test_environment, 'docker') || contains(inputs.test_environment, 'kubeflow') || contains(inputs.test_environment, 'airflow') || contains(inputs.test_environment, 'kubernetes'))
+        if: inputs.os=='Ubuntu-latest' && (contains(inputs.test_environment, 'docker') || contains(inputs.test_environment, 'kubeflow') || contains(inputs.test_environment, 'airflow') || contains(inputs.test_environment, 'kubernetes'))
 
       - uses: actions/checkout@v3
 
@@ -184,9 +185,17 @@ jobs:
         if: inputs.test_environment != 'default'
         run: pip install docker-compose
 
+      - name: Temporary install of ffmpeg
+        if: ${{ inputs.os == 'zenml-runners' }}
+        run: sudo apt-get update && sudo apt-get install ffmpeg -y
+
       - name: Install Linux System Dependencies
-        if: runner.os=='Linux'
-        run: sudo apt install graphviz
+        if: ${{ inputs.os == 'ubuntu-latest' }}
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install software-properties-common -y
+          sudo apt-get install graphviz -y
+          sudo apt-get install curl wget -y
 
       - name: Install MacOS System Dependencies
         if: runner.os=='macOS'

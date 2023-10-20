@@ -18,11 +18,12 @@ on:
         description: 'OS'
         type: choice
         options: 
+          - zenml-runners
           - ubuntu-latest
           - macos-latest
           - windows-latest
         required: false
-        default: 'ubuntu-latest'
+        default: 'zenml-runners'
       python-version:
         description: 'Python version'
         type: choice

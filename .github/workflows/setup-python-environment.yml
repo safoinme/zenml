@@ -28,6 +28,7 @@ on:
         description: 'OS'
         type: choice
         options: 
+          - zenml-runners
           - ubuntu-latest
           - macos-latest
           - windows-latest
@@ -107,6 +108,10 @@ jobs:
         if: ${{ inputs.os == 'ubuntu-latest' }}
         run: sudo apt-get update && sudo apt-get install ffmpeg libsm6 libxext6 -y
 
+      - name: Temporary install of ffmpeg
+        if: ${{ inputs.os == 'zenml-runners' }}
+        run: sudo apt-get update && sudo apt-get install ffmpeg -y
+        
       - name: Setup environment
         uses: ./.github/actions/setup_environment
         with:
@@ -129,12 +134,12 @@ jobs:
           files: "."
           config: ./.typos.toml
         # Only run the spell check on ubuntu-latest and python 3.8
-        if: ${{ inputs.os == 'ubuntu-latest' && inputs.python-version == '3.8' }}
+        if: ${{ inputs.os == 'zenml-runners' && inputs.python-version == '3.8' }}
 
       - name: Docstring check
         run: bash scripts/docstring.sh
         # Only run the docstring check on ubuntu-latest and python 3.8
-        if: ${{ inputs.os == 'ubuntu-latest' && inputs.python-version == '3.8' }}
+        if: ${{ inputs.os == 'zenml-runners' && inputs.python-version == '3.8' }}
 
       - name: Security check
         run: bash scripts/check-security.sh
@@ -149,7 +154,7 @@ jobs:
           config-file: .github/workflows/markdown_check_config.json
         continue-on-error: true
         # Only run the markdown link check on ubuntu-latest and python 3.8
-        if: ${{ inputs.os == 'ubuntu-latest' && inputs.python-version == '3.8' }}
+        if: ${{ inputs.os == 'zenml-runners' && inputs.python-version == '3.8' }}
 
       - name: Check for alembic branch divergence
         run: |
